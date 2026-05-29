@@ -1,0 +1,38 @@
+{
+  "name": "runtime-assessment-platform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "worker:dev": "npm run build && wrangler pages dev dist --port 8788",
+    "worker:serve": "wrangler pages dev dist --port 8788",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name runtime-assessment-platform",
+    "db:init:dev": "node scripts/init-neon.mjs dev",
+    "db:init:prod": "node scripts/init-neon.mjs prod",
+    "typecheck": "tsc -b",
+    "check": "npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "@tailwindcss/forms": "^0.5.7",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "recharts": "^2.12.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260524.0",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.4.5",
+    "vite": "^8.0.14",
+    "wrangler": "^4.15.0"
+  }
+}

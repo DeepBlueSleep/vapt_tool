@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Results - Scan {{ scan.id }}{% endblock %}
+{% block content %}
+<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+  <div>
+    <p class="text-sm text-slate-500 dark:text-slate-400">Results for scan {{ scan.id }}</p>
+    <h1 class="break-all text-2xl font-semibold">{{ scan.target_url }}</h1>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    <a class="btn-secondary" href="/scan/{{ scan.id }}">Progress</a>
+    <a class="btn-secondary" href="/reports/{{ scan.id }}/external" target="_blank">External HTML</a>
+    <a class="btn-secondary" href="/reports/{{ scan.id }}/internal" target="_blank">Internal HTML</a>
+    <form method="post" action="/scan/{{ scan.id }}/delete" onsubmit="return confirm('Delete this scan and generated report artifacts?')">
+      <button class="btn-secondary" type="submit">Delete Scan</button>
+    </form>
+  </div>
+</div>
+
+<section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+  <div class="metric"><span>Posture</span><b>{{ scan.posture_grade }}</b></div>
+  <div class="metric"><span>Findings</span><b>{{ scan.findings|length }}</b></div>
+  <div class="metric"><span>Runtime APIs</span><b>{{ scan.inventory.get("runtime_apis", [])|length }}</b></div>
+  <div class="metric"><span>Routes</span><b>{{ (scan.inventory.get("browser_routes", [])|length) + (scan.inventory.get("pages", [])|length) }}</b></div>
+  <div class="metric"><span>Expanded Surface</span><b>{{ scan.inventory.get("expanded_attack_surface", [])|length }}</b></div>
+</section>
+
+<section class="mt-6 grid gap-6 xl:grid-cols-[1fr_360px]">
+  <div class="space-y-6">
+    <section class="card">
+      <h2 class="text-lg font-semibold">Executive Summary</h2>
+      <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+        The assessment of <b>{{ scan.target_url }}</b> completed with posture grade <b>{{ scan.posture_grade }}</b>
+        and {{ scan.findings|length }} tracked findings. Use the external report for stakeholders and the internal report for remediation owners.
+      </p>
+    </section>
+
+    <section class="card">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <h2 class="text-lg font-semibold">Findings</h2>
+        <form class="flex flex-wrap gap-2" method="get" action="/reports/{{ scan.id }}">
+          <input class="input w-56" name="q" value="{{ q }}" placeholder="Search findings">
+          <select class="input w-36" name="severity">
+            {% for option in ["all", "critical", "high", "medium", "low", "info"] %}
+            <option value="{{ option }}" {% if severity == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn-secondary" type="submit">Filter</button>
+        </form>
+      </div>
+      <div class="mt-4 space-y-3">
+        {% for finding in findings %}
+        <details class="finding">
+          <summary class="flex cursor-pointer flex-wrap items-center gap-3">
+            <span class="severity severity-{{ finding.severity }}">{{ finding.severity }}</span>
+            <b>{{ finding.title }}</b>
+            <span class="badge">{{ finding.confidence }} confidence</span>
+            <span class="badge">{{ finding.state or "new" }}</span>
+          </summary>
+          <div class="mt-4 grid gap-4 lg:grid-cols-3">
+            <div><h3 class="subhead">Evidence</h3><p class="copy">{{ finding.evidence_summary }}</p></div>
+            <div><h3 class="subhead">Affected</h3><p class="copy break-all">{{ finding.url }}</p></div>
+            <div><h3 class="subhead">Remediation</h3><p class="copy">{{ finding.remediation }}</p></div>
+          </div>
+        </details>
+        {% else %}
+        <p class="py-8 text-center text-slate-500">No findings match the current filter.</p>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 class="text-lg font-semibold">Attack Surface Explorer</h2>
+      <div class="mt-4 space-y-3">
+        {% for key, values in inventory_groups %}
+        <details class="rounded-md border border-slate-200 p-3 dark:border-zinc-800">
+          <summary class="cursor-pointer font-medium">{{ key.replace("_", " ").title() }} <span class="badge">{{ values|length }}</span></summary>
+          <input class="input mt-3" placeholder="Filter {{ key }}" oninput="filterList(this)">
+          <ul class="mt-3 max-h-72 overflow-auto text-sm">
+            {% for value in values[:150] %}
+            <li class="filterable break-all border-b border-slate-100 py-2 dark:border-zinc-800">{{ value }}</li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% else %}
+        <p class="text-sm text-slate-500">No inventory was recorded.</p>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+
+  <aside class="space-y-6">
+    <section class="card">
+      <h2 class="text-lg font-semibold">PDF Reports</h2>
+      <div class="mt-4 space-y-4">
+        {% for audience in ["external", "internal"] %}
+          {% set artifact = pdfs[audience] %}
+          <div id="pdf-{{ audience }}">
+            {% include "partials/pdf_status.html" %}
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="flex items-center justify-between gap-2">
+        <h2 class="text-lg font-semibold">Evidence</h2>
+        <a class="link" href="/evidence/{{ scan.id }}">Open</a>
+      </div>
+      <div class="mt-4 grid grid-cols-2 gap-2">
+        {% for evidence in scan.evidence[:6] %}
+        <a class="rounded-md border border-slate-200 p-2 text-sm dark:border-zinc-800" href="/evidence/file/{{ evidence.id }}" target="_blank">
+          <span class="block font-medium">{{ evidence.kind }}</span>
+          <span class="block truncate text-slate-500">{{ evidence.title }}</span>
+        </a>
+        {% else %}
+        <p class="col-span-2 text-sm text-slate-500">No evidence artifacts.</p>
+        {% endfor %}
+      </div>
+    </section>
+  </aside>
+</section>
+{% endblock %}

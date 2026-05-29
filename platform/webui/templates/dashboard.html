@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Assessment Platform{% endblock %}
+{% block content %}
+<section class="page-hero mb-6">
+  <div>
+    <p class="page-kicker">Assessment command center</p>
+    <h1 class="mt-2 text-3xl font-semibold tracking-tight">Runtime security posture</h1>
+    <p class="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-300">Launch safe assessments, monitor live crawler activity, and move from findings to report artifacts in one workflow.</p>
+  </div>
+  <div class="hero-summary">
+    <span>{{ active_scans }} active</span>
+    <b>{{ metrics.open_findings }}</b>
+    <span>open findings</span>
+  </div>
+</section>
+
+<div class="grid gap-6 lg:grid-cols-[380px_1fr]">
+  <section class="card launch-panel h-fit">
+    <div class="panel-title">
+      <div>
+        <p class="page-kicker">New assessment</p>
+        <h2 class="text-xl font-semibold">Start Scan</h2>
+      </div>
+      <span class="status status-queued">ready</span>
+    </div>
+    <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">Runtime analysis, discovery, optional active checks, and report generation.</p>
+    <form class="mt-5 space-y-4" method="post" action="/scan">
+      <label class="block">
+        <span class="label">Target URL</span>
+        <input class="input" name="target_url" required placeholder="https://example.com">
+      </label>
+      <div class="grid grid-cols-2 gap-3">
+        <label class="block">
+          <span class="label">Max depth</span>
+          <input class="input" name="max_depth" type="number" min="0" max="5" value="1">
+        </label>
+        <label class="block">
+          <span class="label">Max pages</span>
+          <input class="input" name="max_pages" type="number" min="1" max="500" value="25">
+        </label>
+      </div>
+      <label class="block">
+        <span class="label">Request budget</span>
+        <input class="input" name="request_budget" type="number" min="1" max="1000" value="40">
+      </label>
+      <label class="block">
+        <span class="label">Report mode</span>
+        <select class="input" name="report_mode">
+          <option value="external">External</option>
+          <option value="internal">Internal</option>
+          <option value="developer">Developer</option>
+          <option value="compliance">Compliance</option>
+        </select>
+      </label>
+      <div class="space-y-2">
+        <label class="check"><input type="checkbox" name="enable_browser" checked> Browser/runtime analysis</label>
+        <label class="check"><input type="checkbox" name="enable_active_checks"> Low-impact active checks</label>
+        <label class="check"><input type="checkbox" name="capture_screenshots" checked> Capture screenshots</label>
+      </div>
+      <details class="advanced-panel" open>
+        <summary class="cursor-pointer text-sm font-semibold">Advanced Discovery</summary>
+        <div class="mt-3 space-y-2">
+          <label class="check"><input type="checkbox" name="enable_attack_surface_expansion" checked> Intelligent attack-surface expansion</label>
+          <label class="check"><input type="checkbox" name="enable_runtime_expansion" checked> Runtime API expansion</label>
+          <label class="check"><input type="checkbox" name="enable_framework_expansion" checked> Framework route inference</label>
+          <label class="check"><input type="checkbox" name="enable_predictable_locations" checked> Predictable location analysis</label>
+          <label class="check"><input type="checkbox" name="enable_api_expansion" checked> Recursive API expansion</label>
+        </div>
+        <div class="mt-3 grid grid-cols-3 gap-2">
+          <label class="block">
+            <span class="label">Candidates</span>
+            <input class="input" name="expansion_max_candidates" type="number" min="1" max="250" value="50">
+          </label>
+          <label class="block">
+            <span class="label">Probe budget</span>
+            <input class="input" name="expansion_probe_budget" type="number" min="0" max="100" value="25">
+          </label>
+          <label class="block">
+            <span class="label">Min confidence</span>
+            <input class="input" name="expansion_min_confidence" type="number" min="0" max="1" step="0.05" value="0.35">
+          </label>
+        </div>
+      </details>
+      <button class="btn-primary w-full" type="submit">Start Scan</button>
+    </form>
+  </section>
+
+  <div class="space-y-6">
+    <section class="metric-grid grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+      <div class="metric"><span>Total scans</span><b>{{ metrics.scans }}</b></div>
+      <div class="metric"><span>Active scans</span><b>{{ active_scans }}</b></div>
+      <div class="metric"><span>Open findings</span><b>{{ metrics.open_findings }}</b></div>
+      <div class="metric"><span>APIs</span><b>{{ inventory_totals.apis }}</b></div>
+      <div class="metric"><span>Runtime routes</span><b>{{ inventory_totals.routes }}</b></div>
+      <div class="metric"><span>Surface size</span><b>{{ inventory_totals.attack_surface }}</b></div>
+    </section>
+
+    <section class="card table-panel">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 class="text-lg font-semibold">Recent Scans</h2>
+          <p class="text-sm text-slate-500 dark:text-slate-400">Status, posture, and report workflow at a glance.</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <a class="btn-secondary" href="/findings">Open findings explorer</a>
+          {% if scans %}
+          <form method="post" action="/scans/delete" onsubmit="return confirm('Delete all scans and generated report artifacts?')">
+            <button class="btn-secondary" type="submit">Delete all scans</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      <div class="mt-4 overflow-x-auto">
+        <table class="table">
+          <thead><tr><th>Target</th><th>Status</th><th>Posture</th><th>Findings</th><th>Surface</th><th></th></tr></thead>
+          <tbody>
+            {% for scan in scans %}
+            <tr>
+              <td class="max-w-md truncate">{{ scan.target_url }}</td>
+              <td><span class="status status-{{ scan.status }}">{{ scan.status }}</span></td>
+              <td><span class="grade">{{ scan.posture_grade }}</span> <span class="muted">{{ "%.1f"|format(scan.posture_score) }}</span></td>
+              <td>{{ scan.findings|length }}</td>
+              <td>{{ (scan.inventory.get("runtime_apis", [])|length) + (scan.inventory.get("endpoints", [])|length) + (scan.inventory.get("browser_routes", [])|length) + (scan.inventory.get("pages", [])|length) }}</td>
+              <td class="text-right">
+                <a class="link" href="/scan/{{ scan.id }}">Monitor</a>
+                <a class="link ml-3" href="/reports/{{ scan.id }}">Results</a>
+                <form class="ml-3 inline" method="post" action="/scan/{{ scan.id }}/delete" onsubmit="return confirm('Delete this scan and generated report artifacts?')">
+                  <button class="link" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="py-8 text-center text-slate-500">No scans yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

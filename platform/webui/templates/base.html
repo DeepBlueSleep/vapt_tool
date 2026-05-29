@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Assessment Platform{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script>
+      tailwind.config = { darkMode: "class" };
+      if (localStorage.theme === "dark" || (!("theme" in localStorage) && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+        document.documentElement.classList.add("dark");
+      }
+    </script>
+    <link rel="stylesheet" href="{{ url_for('ui-static', path='/css/app.css') }}?v=20260529-ui3">
+  </head>
+  <body class="min-h-full text-slate-950 antialiased dark:text-slate-100">
+    <header class="sticky top-0 z-40 app-header">
+      <div class="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+        <a href="/" class="flex items-center gap-3">
+          <span class="brand-mark">RA</span>
+          <span>
+            <span class="block text-sm font-semibold">Runtime Assessment</span>
+            <span class="block text-xs text-slate-500 dark:text-slate-400">Operational security workflow</span>
+          </span>
+        </a>
+        <nav class="hidden items-center gap-1 text-sm md:flex">
+          <a class="nav-link" href="/">Dashboard</a>
+          <a class="nav-link" href="/findings">Findings</a>
+          <a class="nav-link" href="/docs">API Docs</a>
+        </nav>
+        <button class="btn-secondary" onclick="toggleTheme()">Theme</button>
+      </div>
+    </header>
+    <main class="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8">
+      {% block content %}{% endblock %}
+    </main>
+    <script src="{{ url_for('ui-static', path='/js/app.js') }}?v=20260529-ui3"></script>
+  </body>
+</html>

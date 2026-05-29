@@ -1,0 +1,12 @@
+# Local Cloudflare Pages Functions variables.
+# Copy this file to .dev.vars for local worker development.
+
+# Optional Python scanner API. Leave blank for metadata-only operation.
+SCANNER_API_URL=
+
+# Required NeonDB connection strings. Use separate Neon branches/projects.
+DATABASE_URL_DEV=postgresql://user:password@host/db?sslmode=require
+DATABASE_URL_PROD=postgresql://user:password@host/db?sslmode=require
+
+# Required JWT signing secret for Workers auth.
+JWT_SECRET=replace-with-a-long-random-secret

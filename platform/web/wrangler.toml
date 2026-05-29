@@ -1,0 +1,8 @@
+name = "runtime-assessment-platform"
+compatibility_date = "2026-05-28"
+pages_build_output_dir = "dist"
+
+[vars]
+# Optional. When set, the Worker records scans in Neon and forwards scan creation
+# to the Python assessment API. Leave blank for metadata-only edge operation.
+SCANNER_API_URL = ""

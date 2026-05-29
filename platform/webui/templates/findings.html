@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Findings - Assessment Platform{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-xl font-semibold">Findings Explorer</h1>
+      <p class="text-sm text-slate-500 dark:text-slate-400">Search across recent scans, evidence, confidence, and remediation guidance.</p>
+    </div>
+    <form class="flex flex-wrap gap-2" method="get" action="/findings">
+      <input class="input w-64" name="q" value="{{ q }}" placeholder="Search findings">
+      <select class="input w-36" name="severity">
+        {% for option in ["all", "critical", "high", "medium", "low", "info"] %}
+        <option value="{{ option }}" {% if severity == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn-secondary" type="submit">Filter</button>
+    </form>
+  </div>
+  <div class="mt-5 space-y-3">
+    {% for scan, finding in items %}
+    <details class="finding">
+      <summary class="cursor-pointer">
+        <span class="severity severity-{{ finding.severity }}">{{ finding.severity }}</span>
+        <b class="ml-2">{{ finding.title }}</b>
+        <span class="badge ml-2">{{ finding.confidence }}</span>
+        <a class="link ml-2" href="/reports/{{ scan.id }}">scan {{ scan.id }}</a>
+      </summary>
+      <div class="mt-4 grid gap-4 lg:grid-cols-3">
+        <div><h3 class="subhead">Evidence</h3><p class="copy">{{ finding.evidence_summary }}</p></div>
+        <div><h3 class="subhead">Affected Routes/APIs</h3><p class="copy break-all">{{ finding.url }}</p></div>
+        <div><h3 class="subhead">Remediation</h3><p class="copy">{{ finding.remediation }}</p></div>
+      </div>
+    </details>
+    {% else %}
+    <p class="py-8 text-center text-slate-500">No findings found.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

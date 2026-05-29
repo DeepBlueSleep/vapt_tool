@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Evidence - Scan {{ scan.id }}{% endblock %}
+{% block content %}
+<div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+  <div>
+    <p class="text-sm text-slate-500 dark:text-slate-400">Evidence for scan {{ scan.id }}</p>
+    <h1 class="break-all text-2xl font-semibold">{{ scan.target_url }}</h1>
+  </div>
+  <div class="flex gap-2">
+    <a class="btn-secondary" href="/reports/{{ scan.id }}">Results</a>
+    <a class="btn-primary" href="/evidence/{{ scan.id }}/bundle.zip">Download bundle</a>
+  </div>
+</div>
+<section class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+  {% for evidence in scan.evidence %}
+  <article class="card">
+    <div class="flex items-center justify-between gap-2">
+      <h2 class="font-semibold">{{ evidence.title }}</h2>
+      <span class="badge">{{ evidence.kind }}</span>
+    </div>
+    {% if evidence.content_type.startswith("image/") %}
+    <button class="mt-3 block w-full" onclick="openImage('/evidence/file/{{ evidence.id }}')">
+      <img class="max-h-64 w-full rounded-md object-cover" src="/evidence/file/{{ evidence.id }}" alt="{{ evidence.title }}">
+    </button>
+    {% else %}
+    <pre class="log mt-3">{{ evidence.summary or evidence.storage_path }}</pre>
+    {% endif %}
+    <a class="link mt-3 inline-block" href="/evidence/file/{{ evidence.id }}" target="_blank">Open artifact</a>
+  </article>
+  {% else %}
+  <p class="text-slate-500">No evidence artifacts are available for this scan.</p>
+  {% endfor %}
+</section>
+<div id="image-modal" class="fixed inset-0 z-50 hidden bg-black/80 p-6" onclick="closeImage()">
+  <img id="image-modal-img" class="mx-auto max-h-full max-w-full rounded-lg" alt="Evidence image">
+</div>
+{% endblock %}

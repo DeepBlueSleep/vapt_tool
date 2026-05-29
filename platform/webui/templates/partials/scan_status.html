@@ -1,0 +1,54 @@
+<section id="scan-status" class="space-y-5" data-done="{{ 'true' if scan.status not in ['queued', 'running'] else 'false' }}">
+  <div class="card scan-hero">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <span class="status status-{{ scan.status }}">{{ scan.status }}</span>
+        <h2 class="mt-2 text-lg font-semibold">{{ progress.stage }}</h2>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          {{ progress.percent }}% complete{% if progress.updated_at %} / updated {{ progress.updated_at }}{% endif %}
+        </p>
+        {% if scan.error %}<p class="mt-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-100">{{ scan.error }}</p>{% endif %}
+      </div>
+      {% if scan.status == "completed" %}
+      <a class="btn-primary" href="/reports/{{ scan.id }}">Open results</a>
+      {% elif scan.status == "failed" %}
+      <a class="btn-secondary" href="/">Start another scan</a>
+      {% endif %}
+    </div>
+    <div class="mt-5 h-3 overflow-hidden rounded-full bg-slate-100 dark:bg-zinc-800" role="progressbar" aria-valuenow="{{ progress.percent }}" aria-valuemin="0" aria-valuemax="100">
+      <div class="progress-fill" style="width: {{ progress.percent }}%"></div>
+    </div>
+  </div>
+  <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+    <div class="metric"><span>Pages</span><b>{{ progress.pages }}</b></div>
+    <div class="metric"><span>Requests</span><b>{{ progress.requests_seen }}</b></div>
+    <div class="metric"><span>APIs</span><b>{{ progress.apis }}</b></div>
+    <div class="metric"><span>Routes</span><b>{{ progress.routes }}</b></div>
+    <div class="metric"><span>URLs</span><b>{{ progress.urls_seen }}</b></div>
+    <div class="metric"><span>JS files</span><b>{{ progress.js_seen }}</b></div>
+    <div class="metric"><span>Parameters</span><b>{{ progress.params_seen }}</b></div>
+    <div class="metric"><span>Screenshots</span><b>{{ progress.screenshots }}</b></div>
+    <div class="metric"><span>Findings</span><b>{{ progress.findings }}</b></div>
+    <div class="metric"><span>Expanded</span><b>{{ progress.expanded }}</b></div>
+    <div class="metric"><span>Verified</span><b>{{ progress.verified_expanded }}</b></div>
+    <div class="metric"><span>Active checks</span><b>{{ progress.active_checks }}</b></div>
+    <div class="metric"><span>Posture</span><b>{{ scan.posture_grade }}</b></div>
+  </section>
+  <section class="card">
+    <h2 class="text-lg font-semibold">Timeline</h2>
+    <ol class="mt-4 space-y-3 text-sm">
+      <li class="timeline-item is-done"><b>Created</b><span>{{ scan.created_at }}</span></li>
+      <li class="timeline-item {{ 'is-done' if scan.started_at else '' }}"><b>Started</b><span>{{ scan.started_at or "waiting" }}</span></li>
+      <li class="timeline-item {{ 'is-done' if scan.completed_at else '' }}"><b>Completed</b><span>{{ scan.completed_at or "in progress" }}</span></li>
+    </ol>
+  </section>
+  <section class="card">
+    <h2 class="text-lg font-semibold">Live Logs</h2>
+    <pre class="mt-3 log">[scan {{ scan.id }}] status={{ scan.status }} percent={{ progress.percent }}
+[stage] {{ progress.stage }}
+[events] requests={{ progress.requests_seen }} urls={{ progress.urls_seen }} js={{ progress.js_seen }} params={{ progress.params_seen }}
+[inventory] pages={{ progress.pages }} apis={{ progress.apis }} routes={{ progress.routes }} screenshots={{ progress.screenshots }}
+[findings] total={{ progress.findings }}{% for line in progress.recent %}
+{{ line }}{% endfor %}</pre>
+  </section>
+</section>
