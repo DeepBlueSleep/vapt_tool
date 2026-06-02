@@ -5,6 +5,13 @@ export type RuntimeEnvironment = "dev" | "prod";
 const TOKEN_KEY = "assessment.auth.token";
 const ENVIRONMENT_KEY = "assessment.environment";
 
+type ApiErrorPayload = {
+  error?: string;
+  code?: string;
+  detail?: string;
+  hint?: string;
+};
+
 function currentEnvironment(): RuntimeEnvironment {
   return localStorage.getItem(ENVIRONMENT_KEY) === "prod" ? "prod" : "dev";
 }
@@ -41,8 +48,7 @@ async function postAction<T>(path: "/api/auth" | "/api/actions", action: string,
     body: JSON.stringify({ action, payload: payload ?? {} })
   });
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed with HTTP ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
   if (response.status === 204) {
     return undefined as T;
@@ -60,3 +66,26 @@ export const api = {
   deleteScan: (scanId: number) => postAction<void>("/api/actions", "deleteScan", { scanId }),
   deleteAllScans: () => postAction<void>("/api/actions", "deleteAllScans")
 };
+
+async function readErrorMessage(response: Response): Promise<string> {
+  const fallback = `Request failed with HTTP ${response.status}`;
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    try {
+      const payload = (await response.json()) as ApiErrorPayload;
+      return formatErrorPayload(payload, fallback);
+    } catch {
+      return fallback;
+    }
+  }
+  const text = await response.text();
+  return text || fallback;
+}
+
+function formatErrorPayload(payload: ApiErrorPayload, fallback: string): string {
+  const lines = [payload.error || fallback];
+  if (payload.code) lines.push(`Code: ${payload.code}`);
+  if (payload.detail) lines.push(`Detail: ${payload.detail}`);
+  if (payload.hint) lines.push(`Next step: ${payload.hint}`);
+  return lines.join("\n");
+}

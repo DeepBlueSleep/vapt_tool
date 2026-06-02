@@ -61,7 +61,7 @@ export function AuthPanel() {
             type="password"
             value={password}
           />
-          {error ? <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
+          {error ? <p className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
           <button className="button-primary w-full" disabled={loading} type="submit">
             {loading ? "Working" : mode === "login" ? "Sign in" : "Create account"}
           </button>

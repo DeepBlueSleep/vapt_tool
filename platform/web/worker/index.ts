@@ -11,6 +11,13 @@ type ActionRequest = {
   payload?: Record<string, unknown>;
 };
 
+type ErrorPayload = {
+  error: string;
+  code: string;
+  detail?: string;
+  hint?: string;
+};
+
 type ScanRow = {
   id: number;
   target_url: string;
@@ -61,16 +68,17 @@ export default {
       return json({ error: "route not found" }, 404);
     } catch (exc) {
       if (exc instanceof Response) return withCors(exc);
-      const status = exc instanceof Error && /token|auth|password|email/i.test(exc.message) ? 401 : 500;
-      const message = exc instanceof Error ? exc.message : "unexpected worker error";
-      return json({ error: message }, status);
+      const error = describeError(request, exc);
+      console.error(error.code, error.detail ?? error.error);
+      return json(error, error.code === "invalid_credentials" ? 401 : error.code === "bad_request" ? 400 : 500);
     }
   }
 };
 
 async function authRoute(request: Request, env: Env): Promise<Response> {
-  const body = (await request.json()) as ActionRequest;
-  const sql = databaseForEnvironment(env, environmentFromRequest(request));
+  const body = await readActionRequest(request);
+  const appEnv = environmentFromRequest(request);
+  const sql = databaseForEnvironment(env, appEnv);
   if (body.action === "register") {
     const user = await registerUser(sql, String(body.payload?.email ?? ""), String(body.payload?.password ?? ""));
     return json({ user, token: await createJwt(env, user) });
@@ -87,7 +95,7 @@ async function authRoute(request: Request, env: Env): Promise<Response> {
 }
 
 async function actionRoute(request: Request, env: Env, ctx: ExecutionContext, owner: string): Promise<Response> {
-  const body = (await request.json()) as ActionRequest;
+  const body = await readActionRequest(request);
   switch (body.action) {
     case "listScans":
       return json(await listScans(request, env));
@@ -107,6 +115,19 @@ async function actionRoute(request: Request, env: Env, ctx: ExecutionContext, ow
       return reportRoute(request, env, Number(body.payload?.reportId));
     default:
       return json({ error: "unknown action" }, 400);
+  }
+}
+
+async function readActionRequest(request: Request): Promise<ActionRequest> {
+  try {
+    const body = (await request.json()) as Partial<ActionRequest>;
+    if (!body.action || typeof body.action !== "string") {
+      throw new Error("Request JSON must include an action string.");
+    }
+    return { action: body.action, payload: body.payload };
+  } catch (exc) {
+    const message = exc instanceof Error ? exc.message : "Invalid request body.";
+    throw new AppError("bad_request", "The request body is not valid JSON for this API action.", message, "Retry the request with JSON like { \"action\": \"login\", \"payload\": { ... } }.");
   }
 }
 
@@ -290,3 +311,73 @@ function withCors(response: Response): Response {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+class AppError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public detail?: string,
+    public hint?: string
+  ) {
+    super(message);
+  }
+}
+
+function describeError(request: Request, exc: unknown): ErrorPayload {
+  const appEnv = environmentFromRequest(request);
+  const message = exc instanceof Error ? exc.message : String(exc);
+  const normalized = message.toLowerCase();
+
+  if (exc instanceof AppError) {
+    return { error: exc.message, code: exc.code, detail: exc.detail, hint: exc.hint };
+  }
+  if (/invalid email or password|account already exists|password must|valid email|token expired|invalid token|authentication required/i.test(message)) {
+    return { error: message, code: "invalid_credentials" };
+  }
+  if (normalized.includes("jwt_secret")) {
+    return {
+      error: "JWT signing is not configured on this Worker.",
+      code: "jwt_secret_missing",
+      detail: "JWT_SECRET is missing or empty.",
+      hint: "Set JWT_SECRET with wrangler secret put JWT_SECRET."
+    };
+  }
+  if (normalized.includes(`database_url_${appEnv.toUpperCase().toLowerCase()}`) || normalized.includes("is not configured")) {
+    return {
+      error: `The ${appEnv.toUpperCase()} database secret is not configured on this Worker.`,
+      code: "database_secret_missing",
+      detail: `DATABASE_URL_${appEnv.toUpperCase()} is missing or empty.`,
+      hint: `Set DATABASE_URL_${appEnv.toUpperCase()} with wrangler secret put, then redeploy or retry after the secret is active.`
+    };
+  }
+  if (normalized.includes('relation "users" does not exist') || normalized.includes("schema") || normalized.includes("does not exist")) {
+    return {
+      error: `The ${appEnv.toUpperCase()} database schema has not been initialized.`,
+      code: "database_schema_missing",
+      detail: message,
+      hint: `Run the SQL in worker/schema.sql against the same database configured as DATABASE_URL_${appEnv.toUpperCase()}, then insert or register a user.`
+    };
+  }
+  if (normalized.includes("password authentication failed") || normalized.includes("role") || normalized.includes("permission denied")) {
+    return {
+      error: `The ${appEnv.toUpperCase()} database credentials are not valid for this Neon database.`,
+      code: "database_credentials_invalid",
+      detail: message,
+      hint: `Check that DATABASE_URL_${appEnv.toUpperCase()} is copied exactly from Neon and points to the intended branch/database.`
+    };
+  }
+  if (normalized.includes("fetch failed") || normalized.includes("network") || normalized.includes("timeout") || normalized.includes("connect")) {
+    return {
+      error: `The Worker could not connect to the ${appEnv.toUpperCase()} Neon database.`,
+      code: "database_connection_failed",
+      detail: message,
+      hint: `Check the DATABASE_URL_${appEnv.toUpperCase()} host, Neon project status, and whether the URL includes sslmode=require.`
+    };
+  }
+
+  return {
+    error: "The Worker hit an unexpected server error.",
+    code: "unexpected_server_error",
+    detail: message,
+    hint: "Check the Worker logs for this request and verify the selected environment database secret and schema."
+  };
+}
