@@ -1,6 +1,6 @@
 # Runtime Assessment Platform
 
-A Cloudflare Pages application for runtime-aware web security assessment tracking. The frontend is Vite + React + Tailwind, and the API runs on the Cloudflare Workers runtime through Pages Functions with NeonDB Postgres persistence.
+A Cloudflare Workers application for runtime-aware web security assessment tracking. The frontend is Vite + React + Tailwind, static assets are served by Workers assets, and the API runs in the same Worker with NeonDB Postgres persistence.
 
 ## Features
 
@@ -10,7 +10,7 @@ A Cloudflare Pages application for runtime-aware web security assessment trackin
 - POST-only action routing through `/api/auth` and `/api/actions`.
 - Responsive dashboard for posture, severity, attack surface, findings, and report artifacts.
 - Optional forwarding to a separately hosted Python scanner API through `SCANNER_API_URL`.
-- Repo-ready scripts for local development, Neon schema initialization, type checking, build, and Cloudflare Pages deployment.
+- Repo-ready scripts for local development, Neon schema initialization, type checking, build, and Cloudflare Workers deployment.
 
 ## Project Layout
 
@@ -18,10 +18,10 @@ A Cloudflare Pages application for runtime-aware web security assessment trackin
 src/                 React app
 src/components/      Dashboard, auth, scan launcher, lists, reports, UI primitives
 src/hooks/           Data loading and polling hooks
-worker/              NeonDB-backed API implementation
-functions/api/       Cloudflare Pages Function bridge into the worker
+worker/              NeonDB-backed Worker API implementation
+functions/api/       Legacy Pages Function bridge for compatibility
 worker/schema.sql    Neon Postgres schema
-wrangler.toml        Cloudflare Pages config
+wrangler.toml        Cloudflare Workers config
 ```
 
 ## Required Secrets
@@ -81,18 +81,13 @@ Without `SCANNER_API_URL`, scans are created in NeonDB with a queued status and 
 
 ## Cloudflare Setup
 
-Create a Pages project:
+Authenticate Wrangler and set required Worker secrets:
 
 ```bash
-wrangler pages project create runtime-assessment-platform
-```
-
-Set required Cloudflare Pages secrets:
-
-```bash
-wrangler pages secret put DATABASE_URL_DEV --project-name runtime-assessment-platform
-wrangler pages secret put DATABASE_URL_PROD --project-name runtime-assessment-platform
-wrangler pages secret put JWT_SECRET --project-name runtime-assessment-platform
+wrangler login
+wrangler secret put DATABASE_URL_DEV
+wrangler secret put DATABASE_URL_PROD
+wrangler secret put JWT_SECRET
 ```
 
 Deploy:
@@ -101,18 +96,18 @@ Deploy:
 npm run deploy
 ```
 
-Optionally add `SCANNER_API_URL` as a Pages environment variable.
+Optionally set `SCANNER_API_URL` in `wrangler.toml` or as a Worker secret if it should not be committed.
 
 ## GitHub Deployment
 
-This repository includes `.github/workflows/cloudflare-pages.yml`. Add these repository secrets:
+This repository includes `.github/workflows/cloudflare-workers.yml`. Add these repository secrets:
 
 ```text
 CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ACCOUNT_ID
 ```
 
-Also add the required Cloudflare Pages environment secrets before first deploy:
+Before the first GitHub deploy, set the required Worker secrets in Cloudflare:
 
 ```text
 DATABASE_URL_DEV
@@ -120,15 +115,15 @@ DATABASE_URL_PROD
 JWT_SECRET
 ```
 
-Pushes to `main` run `npm run check` and deploy `dist` to Cloudflare Pages.
+Pushes to `main` run `npm run check` from `platform/web` and deploy the Worker with its `dist` static assets.
 
 ## Scripts
 
 - `npm run dev`: Vite dev server.
 - `npm run build`: TypeScript build and Vite production build.
-- `npm run worker:dev`: Build and serve the Pages app locally.
+- `npm run worker:dev`: Build and serve the Worker app locally.
 - `npm run worker:serve`: Serve an already-built `dist`.
 - `npm run db:init:dev`: Apply the Postgres schema to the Neon development database.
 - `npm run db:init:prod`: Apply the Postgres schema to the Neon production database.
-- `npm run deploy`: Build and deploy to Cloudflare Pages.
+- `npm run deploy`: Build and deploy to Cloudflare Workers.
 - `npm run check`: Typecheck and build.

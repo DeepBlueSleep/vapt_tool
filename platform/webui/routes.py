@@ -21,7 +21,7 @@ from scanner.core.config import ScanConfig
 from scanner.utils.url import normalize_url
 
 WEBUI_DIR = Path(__file__).parent
-PDF_RENDERER_VERSION = "2026-05-webui-styled-pdf-v4"
+PDF_RENDERER_VERSION = "2026-05-webui-styled-pdf-v5"
 templates = Jinja2Templates(directory=str(WEBUI_DIR / "templates"))
 
 

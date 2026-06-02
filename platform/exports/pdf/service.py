@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import html.parser
 import re
 from pathlib import Path
@@ -10,6 +11,7 @@ class PdfExportService:
     async def render_pdf(self, html: str, output_path: Path, *, allow_basic_fallback: bool = False) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         renderer_errors: list[str] = []
+        reported_on = dt.datetime.now(dt.UTC).date().isoformat()
         try:
             from playwright.async_api import async_playwright
 
@@ -24,8 +26,11 @@ class PdfExportService:
                     prefer_css_page_size=True,
                     display_header_footer=True,
                     footer_template=(
-                        "<span style='font-size:9px;margin:0 auto;color:#667085'>"
-                        "Page <span class='pageNumber'></span> of <span class='totalPages'></span></span>"
+                        "<div style='width:100%;font-size:9px;color:#4b5563;margin:0 16mm;"
+                        "display:flex;justify-content:space-between;font-family:Arial,sans-serif'>"
+                        f"<span>Reported on {reported_on} | Confidential</span>"
+                        "<span>Page <span class='pageNumber'></span> of <span class='totalPages'></span></span>"
+                        "</div>"
                     ),
                     header_template="<span></span>",
                 )
@@ -132,11 +137,12 @@ def _write_basic_pdf(text: str, output_path: Path) -> None:
 
 
 def _page_stream(lines: list[str], page_number: int, total_pages: int) -> bytes:
+    reported_on = dt.datetime.now(dt.UTC).date().isoformat()
     commands = ["BT", "/F1 11 Tf", "50 742 Td", "14 TL"]
     for line in lines:
         commands.append(f"({_pdf_escape(line)}) Tj")
         commands.append("T*")
-    commands.extend(["/F1 9 Tf", "0 -16 Td", f"(Page {page_number} of {total_pages}) Tj", "ET"])
+    commands.extend(["/F1 9 Tf", "0 -16 Td", f"(Reported on {reported_on} | Confidential) Tj", "330 0 Td", f"(Page {page_number} of {total_pages}) Tj", "ET"])
     return "\n".join(commands).encode("latin-1", "replace")
 
 

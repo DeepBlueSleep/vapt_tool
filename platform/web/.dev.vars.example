@@ -1,4 +1,4 @@
-# Local Cloudflare Pages Functions variables.
+# Local Cloudflare Workers variables.
 # Copy this file to .dev.vars for local worker development.
 
 # Optional Python scanner API. Leave blank for metadata-only operation.

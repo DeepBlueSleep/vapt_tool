@@ -1,22 +1,27 @@
-name: Cloudflare Pages
+name: Cloudflare Workers
 
 on:
   pull_request:
   push:
     branches: [main]
 
+concurrency:
+  group: cloudflare-workers-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: .
+        working-directory: platform/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: platform/web/package-lock.json
       - run: npm ci
       - run: npm run check
 
@@ -26,18 +31,17 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: .
+        working-directory: platform/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: platform/web/package-lock.json
       - run: npm ci
       - run: npm run build
-      - uses: cloudflare/pages-action@v1
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: runtime-assessment-platform
-          directory: dist
+      - run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

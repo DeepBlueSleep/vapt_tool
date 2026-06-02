@@ -105,7 +105,7 @@ def render_vapt_report_html(report: VaptReport) -> str:
     figures = _FigureCounter()
     body = [
         _cover(report),
-        _toc(),
+        _toc(report),
         _simple_section("Distribution List", "This report is intended for authorized business, security, and engineering stakeholders.", report.distribution),
         _simple_section(
             "Disclaimer",
@@ -119,7 +119,6 @@ def render_vapt_report_html(report: VaptReport) -> str:
         _findings_summary(report),
         _finding_sections(report, figures),
         _runtime_analysis(report, figures),
-        _remediation_roadmap(report),
         _appendices(report),
     ]
     return _page(report.title, "".join(body))
@@ -155,8 +154,6 @@ def render_vapt_markdown(report: VaptReport) -> str:
         lines.extend([f"### {category}", ""])
         for item in findings:
             lines.extend(_finding_markdown(item, include_internal=report.audience != "external"))
-    lines.extend(["## Remediation Roadmap", ""])
-    lines.extend(f"- {item}" for item in report.remediation_roadmap)
     if report.audience == "external":
         lines.extend(["", "Detailed implementation guidance is intentionally excluded from the external report."])
     return "\n".join(lines) + "\n"
@@ -395,7 +392,7 @@ def _cover(report: VaptReport) -> str:
         f"<h1>{html.escape(report.title)}</h1>"
         "<p class='deck'>Security Assessment Dashboard</p>"
         f"<p class='lead'>{html.escape(target_label)}</p>"
-        f"<p>Generated {html.escape(report.generated_at_utc)} | Confidential | {html.escape(report.audience.title())} report</p></div>"
+        f"<p>{html.escape(_report_date(report.generated_at_utc))} | Confidential | {html.escape(report.audience.title())} report</p></div>"
         "<div class='cover-grid'>"
         f"<span><b>{len(report.targets)}</b>Targets</span><span><b>{sum(report.severity_counts.values())}</b>Findings</span>"
         f"<span><b>{report.attack_surface.get('runtime_apis', 0)}</b>Runtime APIs</span><span><b>{report.attack_surface.get('auth_routes', 0)}</b>Auth Signals</span>"
@@ -403,7 +400,12 @@ def _cover(report: VaptReport) -> str:
     )
 
 
-def _toc() -> str:
+def _toc(report: VaptReport) -> str:
+    finding_sections = tuple(
+        category
+        for category in ("Application Security Findings", "Infrastructure Security Findings", "Runtime/API Analysis")
+        if report.finding_groups.get(category)
+    )
     sections = (
         "Distribution List",
         "Disclaimer",
@@ -416,12 +418,10 @@ def _toc() -> str:
         "Attack Surface Summary",
         "Findings Summary Table",
         "Detailed Findings",
-        "Application Security Findings",
-        "Infrastructure Security Findings",
-        "Runtime/API Analysis",
-        "Remediation Roadmap",
+        *finding_sections,
         "Appendices",
         "CVSS Methodology",
+        "CWE Reference",
         "OWASP Risk Methodology",
     )
     return _simple_section("Table of Contents", "Report sections included in this deliverable.", sections)
@@ -476,12 +476,22 @@ def _severity_overview(report: VaptReport) -> str:
 
 
 def _attack_surface(report: VaptReport, figures: _FigureCounter) -> str:
+    labels = {
+        "expanded": "Expanded candidates",
+        "verified_expanded": "Verified expanded",
+    }
     cards = "".join(
-        f"<article class='metric'><span>{html.escape(key.replace('_', ' ').title())}</span><b>{value}</b></article>"
+        f"<article class='metric'><span>{html.escape(labels.get(key, key.replace('_', ' ').title()))}</span><b>{value}</b></article>"
         for key, value in report.attack_surface.items()
     )
     caption = figures.next("Attack surface metrics summarize crawl, browser runtime, authentication, and API discovery signals.")
-    return f"<section><h2>Attack Surface Summary</h2><div class='metrics'>{cards}</div><p class='caption'>{html.escape(caption)}</p></section>"
+    definitions = (
+        "<dl class='definitions'>"
+        "<dt>Expanded candidates</dt><dd>Potential routes, APIs, files, or framework paths inferred from observed application behavior and technology signals. These are leads for review, not confirmed vulnerabilities.</dd>"
+        "<dt>Verified expanded</dt><dd>Expanded candidates that responded during safe probing or were otherwise confirmed as reachable during the assessment.</dd>"
+        "</dl>"
+    )
+    return f"<section><h2>Attack Surface Summary</h2><div class='metrics'>{cards}</div>{definitions}<p class='caption'>{html.escape(caption)}</p></section>"
 
 
 def _findings_summary(report: VaptReport) -> str:
@@ -507,7 +517,14 @@ def _findings_summary(report: VaptReport) -> str:
 
 
 def _finding_sections(report: VaptReport, figures: _FigureCounter) -> str:
-    output = ["<section><h2>Detailed Findings</h2></section>"]
+    all_findings = [item for findings in report.finding_groups.values() for item in findings]
+    if not all_findings:
+        return "<section><h2>Detailed Findings</h2><p>No security findings were recorded for this assessment.</p></section>"
+    output = [
+        "<section><h2>Detailed Findings</h2>"
+        "<p>The following sections contain only categories with recorded findings. Empty categories are intentionally omitted.</p>"
+        f"<p>Total detailed findings: {len(all_findings)}.</p></section>"
+    ]
     for category in ("Application Security Findings", "Infrastructure Security Findings", "Runtime/API Analysis"):
         findings = report.finding_groups.get(category, ())
         if not findings:
@@ -564,16 +581,33 @@ def _runtime_analysis(report: VaptReport, figures: _FigureCounter) -> str:
     )
 
 
-def _remediation_roadmap(report: VaptReport) -> str:
-    items = "".join(f"<li>{html.escape(item)}</li>" for item in report.remediation_roadmap)
-    return f"<section><h2>Remediation Roadmap</h2><ol class='roadmap'>{items}</ol></section>"
-
-
 def _appendices(report: VaptReport) -> str:
+    cwe_values = _cwe_values(report)
+    cwe_items = "".join(
+        f"<li><b>{html.escape(value)}</b>: {html.escape(_cwe_description(value))}</li>"
+        for value in cwe_values
+    )
     return (
-        "<section><h2>Appendices</h2>"
-        "<h3>CVSS Methodology</h3><p>CVSS values are provided as severity-aligned guidance when scanner findings do not include a full vector. Manual validation should refine vectors for formal risk acceptance.</p>"
-        "<h3>OWASP Risk Methodology</h3><p>Findings are interpreted using likelihood, impact, exposure breadth, confidence, and affected business workflow context.</p>"
+        "<section class='appendix appendix-cover'><h2>Appendices</h2>"
+        "<p>The following reference pages explain the scoring and weakness identifiers used throughout this report.</p>"
+        "</section>"
+        "<section class='appendix'><h2>Appendix A: CVSS Methodology</h2>"
+        "<p>CVSS means Common Vulnerability Scoring System. It is an industry-standard way to describe vulnerability severity using a numeric score, commonly from 0.0 to 10.0.</p>"
+        "<p>In this report, CVSS values are severity-aligned guidance when a scanner finding does not include a full formal vector. Manual validation should refine vectors before formal risk acceptance or contractual reporting.</p>"
+        "<table><thead><tr><th>Score Range</th><th>Typical Rating</th><th>Meaning</th></tr></thead><tbody>"
+        "<tr><td>9.0-10.0</td><td>Critical</td><td>Likely urgent business or technical risk requiring immediate action.</td></tr>"
+        "<tr><td>7.0-8.9</td><td>High</td><td>Material risk that should be remediated in a near-term release or emergency window.</td></tr>"
+        "<tr><td>4.0-6.9</td><td>Medium</td><td>Meaningful weakness that should be planned, tracked, and verified after remediation.</td></tr>"
+        "<tr><td>0.1-3.9</td><td>Low</td><td>Defense-in-depth issue or limited exposure requiring routine hardening.</td></tr>"
+        "</tbody></table></section>"
+        "<section class='appendix'><h2>Appendix B: CWE Reference</h2>"
+        "<p>CWE means Common Weakness Enumeration. A CWE identifier, such as CWE-79, names the underlying software weakness class behind a finding. It is not a proof of exploit by itself; it helps engineering teams find the right remediation pattern and track recurring weakness categories.</p>"
+        f"<ul>{cwe_items or '<li>No specific CWE identifiers were assigned to this report.</li>'}</ul>"
+        "<p>When a finding lists multiple CWE values, treat them as related weakness categories. The remediation should address the root control gap rather than only the individual URL or evidence sample.</p>"
+        "</section>"
+        "<section class='appendix'><h2>Appendix C: OWASP Risk Methodology</h2>"
+        "<p>Findings are interpreted using likelihood, impact, exposure breadth, confidence, exploitability, and affected business workflow context.</p>"
+        "<p>Automated results should be reviewed by application owners because scanner evidence may not always represent business-criticality, compensating controls, or authentication context.</p>"
         "</section>"
     )
 
@@ -643,8 +677,9 @@ def _page(title: str, body: str) -> str:
 
 def _css() -> str:
     return (
-        "@page{size:A4;margin:16mm}*{box-sizing:border-box}body{margin:0;background:#f4f6f8;color:#17202c;font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.55}"
-        "section{max-width:1120px;margin:0 auto 18px;background:#fff;border:1px solid #d8dee8;border-radius:8px;padding:24px;break-inside:avoid}"
+        "@page{size:A4;margin:16mm 16mm 20mm}*{box-sizing:border-box}body{margin:0;background:#fff;color:#17202c;font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.55;overflow-wrap:anywhere;word-break:normal}"
+        "section{max-width:1120px;margin:0 auto 22px;background:#fff;border:0;border-radius:0;padding:0 0 14px;break-inside:auto;border-bottom:1px solid #e5e7eb}"
+        "section:last-child{border-bottom:0}.appendix{min-height:920px;break-before:page;padding-top:8px}.appendix-cover{min-height:360px}"
         ".cover{min-height:82vh;display:grid;align-content:space-between;background:#102033;color:#fff;border:0}.cover h1{font-size:48px;line-height:1.05;margin:8px 0 16px}"
         ".lead{font-size:20px;color:#dbeafe}.eyebrow{text-transform:uppercase;font-size:12px;letter-spacing:.08em;color:#506174;font-weight:700}.cover .eyebrow{color:#a7f3d0}"
         ".cover-grid,.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.cover-grid span,.metric{border:1px solid #d8dee8;border-radius:8px;padding:14px;background:#f8fafc}"
@@ -654,12 +689,14 @@ def _css() -> str:
         ".sev-critical{background:#7f1d1d;color:#fff}.sev-high{background:#dc2626;color:#fff}.sev-medium{background:#f59e0b;color:#111827}.sev-low{background:#dbeafe;color:#1d4ed8}.sev-info{background:#e5e7eb;color:#374151}"
         ".heatmap{height:12px;display:flex;border-radius:999px;overflow:hidden;background:#e5e7eb;margin-top:12px}.heat{display:block;height:12px}"
         "table{width:100%;border-collapse:collapse;font-size:14px}th,td{border-bottom:1px solid #e5e7eb;padding:10px;text-align:left;vertical-align:top}th{color:#506174;background:#f8fafc}"
-        ".finding-card{border:1px solid #d8dee8;border-radius:8px;padding:20px;margin:16px 0;background:#fff}.finding-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}"
+        ".finding-card{border:0;border-left:4px solid #0f766e;border-radius:0;padding:8px 0 8px 18px;margin:18px 0;background:#fff;break-inside:auto}.finding-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}"
         ".meta{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 16px}.meta span{border:1px solid #d8dee8;border-radius:999px;padding:4px 10px;background:#f8fafc;color:#506174;font-size:12px}"
-        ".evidence-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.evidence-card{margin:0;border:1px solid #d8dee8;border-radius:8px;overflow:hidden;background:#0f172a}"
-        "pre{margin:0;padding:14px;white-space:pre-wrap;word-break:break-word;color:#e5e7eb;font:12px/1.45 Consolas,Menlo,monospace}.evidence-card figcaption,.caption{font-size:12px;color:#506174;padding:8px 12px;background:#f8fafc;margin:0}"
-        ".columns{columns:2;word-break:break-word}@media(max-width:760px){section{border-radius:0;margin-bottom:10px}.cover h1{font-size:34px}.columns{columns:1}.finding-head{display:block}}"
-        "@media print{body{background:#fff}section{box-shadow:none}.cover{page-break-after:always}.finding-card{break-inside:avoid}}"
+        ".definitions{display:grid;grid-template-columns:170px 1fr;gap:8px 14px;margin:16px 0;padding:12px 0;border-top:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb}.definitions dt{font-weight:800;color:#111827}.definitions dd{margin:0;color:#374151}"
+        ".evidence-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.evidence-card{margin:0;border:1px solid #334155;border-radius:6px;overflow:hidden;background:#020617}"
+        "pre{margin:0;padding:14px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;color:#f8fafc;background:#020617;font:12px/1.5 Consolas,Menlo,monospace}.evidence-card figcaption,.caption{font-size:12px;color:#374151;padding:8px 0;background:#fff;margin:0}"
+        "p,li,td,dd{overflow-wrap:anywhere}.columns{columns:2;overflow-wrap:anywhere}.appendix p,.appendix li{font-size:15px;line-height:1.7}.appendix table{margin-top:18px}"
+        "@media(max-width:760px){section{border-radius:0;margin-bottom:10px}.cover h1{font-size:34px}.columns{columns:1}.finding-head{display:block}.definitions{grid-template-columns:1fr}}"
+        "@media print{body{background:#fff}section{box-shadow:none}.cover{page-break-after:always}.appendix{page-break-before:always}.finding-card{break-inside:auto}}"
     )
 
 
@@ -686,6 +723,32 @@ def _complexity_phrase(surface: dict[str, int], frameworks: list[str]) -> str:
 def _host(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     return parsed.netloc or url
+
+
+def _report_date(value: str) -> str:
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return value.split("T", 1)[0]
+
+
+def _cwe_values(report: VaptReport) -> tuple[str, ...]:
+    values: list[str] = []
+    for findings in report.finding_groups.values():
+        for item in findings:
+            values.extend(part.strip() for part in item.cwe.split(",") if part.strip().startswith("CWE-"))
+    return tuple(dict.fromkeys(values))
+
+
+def _cwe_description(value: str) -> str:
+    descriptions = {
+        "CWE-79": "Improper neutralization of input during web page generation, commonly associated with cross-site scripting risk.",
+        "CWE-209": "Generation of error messages containing sensitive information, which can disclose implementation detail to attackers.",
+        "CWE-284": "Improper access control, where authorization or permission boundaries may not be enforced correctly.",
+        "CWE-319": "Cleartext transmission of sensitive information over a channel that should be protected.",
+        "CWE-614": "Sensitive cookie in an HTTPS session without the Secure attribute, increasing exposure if transport is downgraded or mishandled.",
+    }
+    return descriptions.get(value, "Common Weakness Enumeration category referenced by this finding. Use the CWE identifier to look up the weakness class and recommended mitigation pattern.")
 
 
 def _truncate(value: str, limit: int) -> str:
