@@ -10,6 +10,7 @@ export interface AuthEnv {
 }
 
 const encoder = new TextEncoder();
+const PASSWORD_HASH_ITERATIONS = 100_000;
 
 export async function registerUser(sql: NeonQueryFunction<false, false>, email: string, password: string): Promise<AuthUser> {
   assertCredentials(email, password);
@@ -81,7 +82,7 @@ async function hashPassword(password: string, salt: string): Promise<string> {
       name: "PBKDF2",
       hash: "SHA-256",
       salt: encoder.encode(salt),
-      iterations: 210_000
+      iterations: PASSWORD_HASH_ITERATIONS
     },
     key,
     256
@@ -137,4 +138,3 @@ function timingSafeEqual(first: string, second: string): boolean {
   }
   return diff === 0;
 }
-
