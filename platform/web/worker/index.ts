@@ -60,10 +60,10 @@ export default {
     if (request.method !== "POST") return json({ error: "POST required" }, 405);
 
     try {
-      if (url.pathname === "/api/auth") return authRoute(request, env);
+      if (url.pathname === "/api/auth") return await authRoute(request, env);
       if (url.pathname === "/api/actions") {
         const user = await requireUser(request, env);
-        return actionRoute(request, env, ctx, user.email);
+        return await actionRoute(request, env, ctx, user.email);
       }
       return json({ error: "route not found" }, 404);
     } catch (exc) {
