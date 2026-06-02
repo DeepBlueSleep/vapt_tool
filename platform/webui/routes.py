@@ -213,11 +213,11 @@ async def internal_report(request: Request, scan_id: int) -> Response:
 
 
 @router.post("/reports/{scan_id}/{audience}.pdf")
-async def generate_pdf(request: Request, scan_id: int, audience: str) -> Response:
+async def generate_pdf(request: Request, scan_id: int, audience: str, force: str | None = Form(default=None)) -> Response:
     if audience not in {"external", "internal"}:
         raise HTTPException(status_code=404, detail="unsupported report audience")
     scan = await _get_scan_or_404(request, scan_id)
-    artifact = await _ensure_pdf(request, scan, audience)
+    artifact = await _ensure_pdf(request, scan, audience, force=force == "true")
     return templates.TemplateResponse(
         request,
         "partials/pdf_status.html",
@@ -306,7 +306,7 @@ async def _get_scan_or_404(request: Request, scan_id: int) -> Scan:
     return scan
 
 
-async def _ensure_pdf(request: Request, scan: Scan, audience: str) -> ReportArtifact:
+async def _ensure_pdf(request: Request, scan: Scan, audience: str, *, force: bool = False) -> ReportArtifact:
     existing = next(
         (
             report
@@ -317,7 +317,7 @@ async def _ensure_pdf(request: Request, scan: Scan, audience: str) -> ReportArti
         ),
         None,
     )
-    if existing is not None:
+    if existing is not None and not force:
         return existing
     service = ReportService()
     bundle = service.build_external(scan) if audience == "external" else service.build_internal(scan)

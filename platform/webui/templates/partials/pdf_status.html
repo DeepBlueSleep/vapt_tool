@@ -17,8 +17,9 @@
         hx-swap="outerHTML"
         hx-indicator="#pdf-indicator-{{ audience }}"
         hx-disabled-elt="this"
+        {% if artifact %}hx-vals='{"force":"true"}'{% endif %}
         hx-on::response-error="this.closest('[id^=pdf-]').querySelector('[data-pdf-error]').textContent = event.detail.xhr.responseText">
-        <span class="button-label">Generate</span>
+        <span class="button-label">{{ "Regenerate" if artifact else "Generate" }}</span>
         <span id="pdf-indicator-{{ audience }}" class="htmx-indicator inline-flex items-center gap-2">
           <span class="spinner"></span>
           Working
