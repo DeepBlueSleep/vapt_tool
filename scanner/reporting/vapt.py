@@ -121,6 +121,13 @@ def render_vapt_report_html(report: VaptReport) -> str:
         _runtime_analysis(report, figures),
         _appendices(report),
     ]
+    for target in report.targets:
+        if target.inventory.get("tls"):
+            body.append(_simple_section("TLS observations", target.input_url, target.inventory["tls"]))
+        coverage = target.inventory.get("coverage", [])
+        if coverage or target.errors:
+            body.append(_simple_section("Coverage and limitations", target.input_url,
+                                        list(coverage) + [f"Scan error: {error}" for error in target.errors]))
     return _page(report.title, "".join(body))
 
 
@@ -156,6 +163,14 @@ def render_vapt_markdown(report: VaptReport) -> str:
             lines.extend(_finding_markdown(item, include_internal=report.audience != "external"))
     if report.audience == "external":
         lines.extend(["", "Detailed implementation guidance is intentionally excluded from the external report."])
+    for target in report.targets:
+        if target.inventory.get("tls"):
+            lines.extend(["", "## TLS observations", "", target.input_url, ""])
+            lines.extend(f"- {item}" for item in target.inventory["tls"])
+        if target.inventory.get("coverage") or target.errors:
+            lines.extend(["", "## Coverage and limitations", "", target.input_url, ""])
+            lines.extend(f"- {item}" for item in target.inventory.get("coverage", []))
+            lines.extend(f"- Scan error: {error}" for error in target.errors)
     return "\n".join(lines) + "\n"
 
 
@@ -170,6 +185,12 @@ def vapt_json_payload(report: VaptReport, include_internal: bool) -> dict[str, A
         "severity_counts": report.severity_counts,
         "attack_surface": report.attack_surface,
         "runtime_summary": {"title": report.runtime_summary.title, "body": report.runtime_summary.body, "items": list(report.runtime_summary.items)},
+        "assessments": [
+            {"target": target.input_url, "coverage_status": target.coverage_status,
+             "coverage": target.inventory.get("coverage", []), "coverage_gaps": target.inventory.get("coverage_gaps", []),
+             "tls": target.inventory.get("tls", []), "errors": list(target.errors)}
+            for target in report.targets
+        ],
         "findings": [
             {
                 "title": item.source.title,
@@ -254,12 +275,18 @@ def _executive_narrative(
     )
     if audience == "external":
         summary += " Sensitive exploit detail has been reduced for external distribution."
+    if any(target.coverage_status in {"partial", "failed"} for target in targets):
+        summary = "Coverage is partial or failed for one or more targets; the observed findings and grades cannot establish the security of untested areas. " + summary
+    if targets and all(target.coverage_status == "failed" for target in targets):
+        summary = "The automated assessment could not analyze application pages. No application security posture was established. Review execution errors and any separately observed transport findings before retrying."
     business = (
         "The main business concern is the combination of externally reachable functionality, browser-discovered behavior, and recurring control gaps. "
         "These conditions can increase the likelihood of unauthorized data exposure, client-side abuse, or avoidable operational disruption if left unmanaged."
         if critical_high or runtime or surface.get("apis", 0)
         else "Observed risk is currently limited, but routine hardening and validation should continue so low-severity weaknesses do not become durable control gaps."
     )
+    if targets and all(target.coverage_status == "failed" for target in targets):
+        business = "Business risk could not be assessed from the available application evidence."
     return summary, business
 
 

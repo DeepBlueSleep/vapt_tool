@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from scanner.core.config import ScanConfig
+from scanner.core.config import ScanConfig, apply_scan_profile
 from scanner.core.orchestrator import Scanner
 from scanner.plugins.events import EventType, ScannerEvent
 
@@ -156,7 +156,7 @@ class ScanQueue:
 
 
 def scan_config_from_payload(payload: ScanCreate, out_dir: Path) -> ScanConfig:
-    return ScanConfig(
+    config = ScanConfig(
         out_dir=out_dir,
         max_depth=payload.max_depth,
         max_pages=payload.max_pages,
@@ -164,6 +164,12 @@ def scan_config_from_payload(payload: ScanCreate, out_dir: Path) -> ScanConfig:
         enable_browser_checks=payload.enable_browser,
         enable_active_checks=payload.enable_active_checks,
         capture_screenshots=payload.capture_screenshots,
+        max_requests=payload.max_requests,
+        browser_page_budget=payload.browser_page_budget,
+        browser_max_rounds=payload.browser_max_rounds,
+        enable_tls_checks=payload.enable_tls_checks,
+        probe_legacy_tls=payload.probe_legacy_tls,
+        enable_cve_enrichment=payload.enable_cve_enrichment,
         enable_attack_surface_expansion=bool(getattr(payload, "enable_attack_surface_expansion", True)),
         enable_framework_expansion=bool(getattr(payload, "enable_framework_expansion", True)),
         enable_predictable_locations=bool(getattr(payload, "enable_predictable_locations", True)),
@@ -173,6 +179,14 @@ def scan_config_from_payload(payload: ScanCreate, out_dir: Path) -> ScanConfig:
         expansion_probe_budget=max(int(getattr(payload, "expansion_probe_budget", 25)), 0),
         expansion_min_confidence=max(0.0, min(float(getattr(payload, "expansion_min_confidence", 0.35)), 1.0)),
     )
+    config = apply_scan_profile(config, payload.profile)
+    if "enable_tls_checks" in payload.model_fields_set and not payload.enable_tls_checks:
+        from dataclasses import replace
+        config = replace(config, enable_tls_checks=False)
+    if "max_requests" in payload.model_fields_set:
+        from dataclasses import replace
+        config = replace(config, max_requests=payload.max_requests)
+    return config
 
 
 def _expected_work(config: ScanConfig) -> int:

@@ -22,6 +22,9 @@ class AsyncCrawler:
         self.client = client
         self.scope = scope
         self.robots = RobotsCache()
+        self.depth_limited_urls: set[str] = set()
+        self.robots_excluded = 0
+        self.pending_urls = 0
 
     async def crawl(self, start_url: str) -> list[Page]:
         start = normalize_url(start_url)
@@ -34,7 +37,7 @@ class AsyncCrawler:
 
         while queue and len(pages) < self.config.max_pages:
             batch: list[tuple[str, int]] = []
-            while queue and len(batch) < self.config.concurrency:
+            while queue and len(batch) < min(self.config.concurrency, self.config.max_pages - len(pages)):
                 url, depth = queue.popleft()
                 if url in seen or depth > self.config.max_depth or not self.scope.is_allowed(url):
                     continue
@@ -48,16 +51,20 @@ class AsyncCrawler:
                     continue
                 pages.append(page)
                 if depth >= self.config.max_depth:
+                    self.depth_limited_urls.update(link for link in page.links if link not in seen and self.scope.is_allowed(link))
                     continue
                 for link in page.links:
                     if link not in seen and self.scope.is_allowed(link):
                         queue.append((link, depth + 1))
+        self.pending_urls = len({url for url, _ in queue if url not in seen})
+        self.depth_limited_urls.difference_update(page.url for page in pages)
         return pages
 
     async def _fetch_page(self, url: str, depth: int) -> tuple[Page | None, int]:
         if self.config.scope.respect_robots_txt:
             allowed = await self.robots.allowed(self.client, url, self.config.user_agent)
             if not allowed:
+                self.robots_excluded += 1
                 LOGGER.info("robots_disallowed", extra={"url": url})
                 return None, depth
         response = await self.client.get(url)

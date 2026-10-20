@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
-from scanner.core.http import HttpClient
+from scanner.core.http import HttpClient, HttpResponse
 from scanner.discovery.parameters import EndpointSignature, Parameter, ParameterType
 from scanner.utils.url import origin_for
 
@@ -19,6 +20,23 @@ API_CANDIDATES = (
     "/graphql",
     "/api/graphql",
 )
+
+
+def api_response_evidence(response: HttpResponse, path: str) -> bool:
+    if response.status in {401, 403}:
+        return True
+    if response.status != 200 or not response.body:
+        return False
+    text = response.body.decode("utf-8", "ignore")
+    if path.endswith("security.txt"):
+        return any(line.lower().startswith("contact:") for line in text.splitlines())
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return any(marker in text.lower() for marker in ("swagger-ui", "swaggerui", "<redoc"))
+    if path.endswith(("openapi.json", "swagger.json")):
+        return isinstance(payload, dict) and bool(payload.get("openapi") or payload.get("swagger")) and isinstance(payload.get("paths"), dict)
+    return isinstance(payload, (dict, list))
 
 
 @dataclass(frozen=True)
@@ -36,7 +54,7 @@ async def discover_api_surfaces(client: HttpClient, base_url: str) -> tuple[ApiS
     origin = origin_for(base_url)
     for path in API_CANDIDATES:
         response = await client.get(origin + path)
-        if response.status not in {200, 401, 403}:
+        if not api_response_evidence(response, path):
             continue
         body_text = response.body.decode("utf-8", "ignore")
         kind = _classify_api(path, body_text, response.headers)
@@ -76,8 +94,18 @@ def _parse_openapi(body: str, source_url: str) -> tuple[tuple[EndpointSignature,
         payload = json.loads(body)
     except json.JSONDecodeError:
         return (), {}
+    if not isinstance(payload, dict) or not isinstance(payload.get("paths", {}), dict):
+        return (), {}
+    base_url = origin_for(source_url) + "/"
+    servers = payload.get("servers", [])
+    if isinstance(servers, list) and servers and isinstance(servers[0], dict):
+        server = servers[0].get("url")
+        if isinstance(server, str) and "{" not in server:
+            base_url = urllib.parse.urljoin(source_url, server).rstrip("/") + "/"
+    elif isinstance(payload.get("basePath"), str):
+        base_url = urllib.parse.urljoin(base_url, payload["basePath"]).rstrip("/") + "/"
     endpoints: list[EndpointSignature] = []
-    for path, methods in payload.get("paths", {}).items():
+    for path, methods in list(payload.get("paths", {}).items())[:1000]:
         if not isinstance(methods, dict):
             continue
         for method, spec in methods.items():
@@ -85,7 +113,8 @@ def _parse_openapi(body: str, source_url: str) -> tuple[tuple[EndpointSignature,
                 continue
             parameters = []
             if isinstance(spec, dict):
-                for parameter in spec.get("parameters", []):
+                raw_parameters = spec.get("parameters", [])
+                for parameter in raw_parameters if isinstance(raw_parameters, list) else []:
                     name = parameter.get("name") if isinstance(parameter, dict) else None
                     if name:
                         parameters.append(
@@ -97,8 +126,10 @@ def _parse_openapi(body: str, source_url: str) -> tuple[tuple[EndpointSignature,
                                 method=method.upper(),
                             )
                         )
-            endpoints.append(EndpointSignature(url=path, method=method.upper(), parameters=tuple(parameters)))
-    schemas = payload.get("components", {}).get("schemas", {})
+            endpoint_url = urllib.parse.urljoin(base_url, path.lstrip("/"))
+            endpoints.append(EndpointSignature(url=endpoint_url, method=method.upper(), parameters=tuple(parameters)))
+    components = payload.get("components", {})
+    schemas = components.get("schemas", {}) if isinstance(components, dict) else {}
     return tuple(endpoints), schemas if isinstance(schemas, dict) else {}
 
 

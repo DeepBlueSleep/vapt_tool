@@ -6,6 +6,7 @@ import urllib.parse
 from scanner.checks.common import make_finding
 from scanner.core.models import Classification, Confidence, Finding, FindingScope, Page, Reference, Severity
 from scanner.plugins.base import PluginMetadata
+from scanner.checks.policies import parse_csp, script_policy_risks
 
 SECURITY_HEADERS = {
     "strict-transport-security": (
@@ -53,7 +54,7 @@ class HeaderCheck:
                     )
         csp = first_header(page.headers, "content-security-policy")
         if csp:
-            risky_tokens = [token for token in ("'unsafe-inline'", "'unsafe-eval'", "*") if token in csp]
+            risky_tokens = script_policy_risks(page.headers.get("content-security-policy", []))
             if risky_tokens:
                 findings.append(
                     make_finding(
@@ -63,13 +64,15 @@ class HeaderCheck:
                         severity=Severity.MEDIUM,
                         classification=Classification.WEAKNESS,
                         confidence=Confidence.HIGH,
-                        evidence="Risky CSP tokens: " + ", ".join(risky_tokens),
+                        evidence="Effective script policy permits: " + ", ".join(risky_tokens),
                         remediation="Remove unsafe CSP tokens where possible and use nonces, hashes, and specific source allowlists.",
                         scope=FindingScope.HOST,
                         references=[Reference("MDN CSP", "https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP")],
                     )
                 )
-            if "frame-ancestors" not in csp:
+            framed = any("frame-ancestors" in parse_csp(policy) for header in page.headers.get("content-security-policy", []) for policy in header.split(","))
+            x_frame_options = (first_header(page.headers, "x-frame-options") or "").lower()
+            if not framed and x_frame_options not in {"deny", "sameorigin"}:
                 findings.append(
                     make_finding(
                         check=self.metadata.name,
@@ -83,6 +86,23 @@ class HeaderCheck:
                         scope=FindingScope.HOST,
                     )
                 )
+        hsts = first_header(page.headers, "strict-transport-security")
+        if hsts is not None and urllib.parse.urlsplit(page.final_url).scheme == "https":
+            max_age = re.search(r"(?:^|;)\s*max-age\s*=\s*\"?(\d+)\"?\s*(?:;|$)", hsts, re.I)
+            if not max_age or int(max_age.group(1)) == 0:
+                findings.append(make_finding(
+                    check=self.metadata.name, url=page.final_url, title="HSTS policy is disabled or invalid",
+                    severity=Severity.MEDIUM, classification=Classification.WEAKNESS, confidence=Confidence.HIGH,
+                    evidence="Strict-Transport-Security has no usable positive max-age.",
+                    remediation="Set a valid positive max-age after verifying HTTPS support.", scope=FindingScope.HOST,
+                ))
+        nosniff = first_header(page.headers, "x-content-type-options")
+        if nosniff is not None and nosniff.strip().lower() != "nosniff":
+            findings.append(make_finding(
+                check=self.metadata.name, url=page.final_url, title="X-Content-Type-Options has an invalid value",
+                severity=Severity.LOW, classification=Classification.WEAKNESS, confidence=Confidence.HIGH,
+                evidence="The header value is not nosniff.", remediation="Set X-Content-Type-Options: nosniff.", scope=FindingScope.HOST,
+            ))
         return findings
 
 
@@ -97,8 +117,12 @@ class CookieCheck:
     async def analyze(self, page: Page, _report: object) -> list[Finding]:
         findings: list[Finding] = []
         for cookie in page.headers.get("set-cookie", []):
-            lower = cookie.lower()
-            missing = [flag for flag in ("secure", "httponly", "samesite") if flag not in lower]
+            parts = cookie.split(";")
+            name = parts[0].partition("=")[0].strip()
+            attributes = {part.partition("=")[0].strip().lower(): part.partition("=")[2].strip() for part in parts[1:]}
+            if attributes.get("max-age") == "0":
+                continue
+            missing = [flag for flag in ("secure", "httponly", "samesite") if flag not in attributes]
             if missing:
                 findings.append(
                     make_finding(
@@ -108,11 +132,33 @@ class CookieCheck:
                         severity=Severity.MEDIUM if "secure" in missing else Severity.LOW,
                         classification=Classification.WEAKNESS,
                         confidence=Confidence.HIGH,
-                        evidence="Missing attributes: " + ", ".join(missing),
+                        evidence=f"Cookie {name}: missing attributes: " + ", ".join(missing) + ". Cookie value omitted.",
                         remediation="Set Secure, HttpOnly, and SameSite attributes on sensitive cookies.",
                         scope=FindingScope.ENDPOINT,
+                        dedup_key=f"cookie-attributes:{page.final_url}:{name}",
                     )
                 )
+            invalid = []
+            if attributes.get("samesite", "").lower() == "none" and "secure" not in attributes:
+                invalid.append("SameSite=None requires Secure")
+            if "samesite" in attributes and attributes["samesite"].lower() not in {"strict", "lax", "none"}:
+                invalid.append("SameSite has an unrecognized value")
+            if name.startswith("__Secure-") and "secure" not in attributes:
+                invalid.append("__Secure- prefix requires Secure")
+            if name.startswith(("__Secure-", "__Host-")) and urllib.parse.urlsplit(page.final_url).scheme != "https":
+                invalid.append("Cookie prefix requires an HTTPS origin")
+            if "partitioned" in attributes and "secure" not in attributes:
+                invalid.append("Partitioned cookies require Secure")
+            if name.startswith("__Host-") and ("secure" not in attributes or "domain" in attributes or attributes.get("path") != "/"):
+                invalid.append("__Host- prefix requires Secure, Path=/, and no Domain")
+            if invalid:
+                findings.append(make_finding(
+                    check=self.metadata.name, url=page.final_url, title="Cookie has incompatible security attributes",
+                    severity=Severity.MEDIUM, classification=Classification.WEAKNESS, confidence=Confidence.HIGH,
+                    evidence=f"Cookie {name}: " + "; ".join(invalid) + ". Cookie value omitted.",
+                    remediation="Correct the cookie attributes and confirm browser acceptance.",
+                    scope=FindingScope.ENDPOINT, dedup_key=f"cookie-invalid:{page.final_url}:{name}",
+                ))
         return findings
 
 

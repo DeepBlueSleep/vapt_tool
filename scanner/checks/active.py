@@ -30,10 +30,11 @@ class SafeActiveCheck:
         return findings
 
     async def _cors(self, page: Page) -> list[Finding]:
-        response = await self.client.request("GET", page.final_url, retries=0)
+        response = await self.client.request("GET", page.final_url, retries=0,
+                                             headers={"Origin": "https://scanner-origin.invalid"}, active=True)
         allow_origin = (response.headers.get("access-control-allow-origin") or [""])[0]
         allow_credentials = (response.headers.get("access-control-allow-credentials") or [""])[0].lower()
-        if allow_origin == "*" and allow_credentials == "true":
+        if allow_origin == "https://scanner-origin.invalid" and allow_credentials == "true":
             return [
                 make_finding(
                     check=self.metadata.name,
@@ -42,7 +43,7 @@ class SafeActiveCheck:
                     severity=Severity.HIGH,
                     classification=Classification.WEAKNESS,
                     confidence=Confidence.HIGH,
-                    evidence="Access-Control-Allow-Origin is * and credentials are allowed.",
+                    evidence="Server reflected an arbitrary Origin and allowed credentials. Authentication impact requires review.",
                     remediation="Use a strict origin allowlist and avoid wildcard CORS with credentials.",
                 )
             ]
@@ -70,7 +71,7 @@ class SafeActiveCheck:
         ]
 
     async def _options(self, page: Page) -> list[Finding]:
-        response = await self.client.request("OPTIONS", page.final_url, max_body=0, retries=0)
+        response = await self.client.request("OPTIONS", page.final_url, max_body=0, retries=0, active=True)
         methods = ",".join(response.headers.get("allow", []) + response.headers.get("access-control-allow-methods", [])).upper()
         dangerous = [method for method in ("PUT", "DELETE", "TRACE") if method in methods]
         if dangerous:
@@ -120,10 +121,12 @@ class SafeActiveCheck:
             return []
         parsed = urllib.parse.urlparse(page.final_url)
         query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
-        query[redirect_params[0]] = "https://example.com/"
+        query[redirect_params[0]] = "https://scanner-redirect.invalid/"
         test_url = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
-        response = await self.client.get(test_url)
-        if response.final_url.startswith("https://example.com"):
+        response = await self.client.request("GET", test_url, follow_redirects=False, active=True)
+        location = (response.headers.get("location") or [""])[0]
+        destination = urllib.parse.urlsplit(urllib.parse.urljoin(test_url, location))
+        if response.status in {301, 302, 303, 307, 308} and destination.hostname == "scanner-redirect.invalid":
             return [
                 make_finding(
                     check=self.metadata.name,
@@ -132,7 +135,7 @@ class SafeActiveCheck:
                     severity=Severity.MEDIUM,
                     classification=Classification.WEAKNESS,
                     confidence=Confidence.MEDIUM,
-                    evidence="A redirect-like parameter navigated to example.com.",
+                    evidence="A redirect-like parameter produced a Location header targeting scanner-redirect.invalid; destination was not fetched.",
                     remediation="Validate redirect targets against a strict relative-path or origin allowlist.",
                     scope=FindingScope.PARAMETER,
                     metadata={"parameter": redirect_params[0], "endpoint": page.final_url},

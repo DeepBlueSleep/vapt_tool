@@ -31,14 +31,15 @@ def score_posture(report: TargetReport) -> PostureScore:
     penalty = max_risk * 0.45 + critical_high * 8 + api_exposure * 0.12 + auth_exposure * 0.1 + runtime * 0.08 + third_party * 0.08
     score = max(0.0, round(100.0 - penalty, 1))
     return PostureScore(
-        score=score,
-        grade=_grade(score),
+        score=0.0 if report.coverage_status == "failed" else score,
+        grade="n/a" if report.coverage_status == "failed" else _grade(score),
         api_exposure=round(api_exposure, 1),
         auth_exposure=round(auth_exposure, 1),
         browser_runtime_complexity=round(runtime, 1),
         third_party_exposure=round(third_party, 1),
         missing_controls=round(missing_controls, 1),
-        summary=_summary(score),
+        summary=("Assessment failed; security posture could not be established." if report.coverage_status == "failed"
+                 else ("Partial assessment. " if report.coverage_status == "partial" else "") + _summary(score)),
     )
 
 

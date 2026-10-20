@@ -26,6 +26,14 @@
     <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">Runtime analysis, discovery, optional active checks, and report generation.</p>
     <form class="mt-5 space-y-4" method="post" action="/scan">
       <label class="block">
+        <span class="label">Scan profile</span>
+        <select class="input" name="profile">
+          <option value="standard">Standard â€” use settings below</option>
+          <option value="deep">Deep public assessment</option>
+        </select>
+      </label>
+      <p class="text-sm text-slate-500">Deep enables active checks, TLS certificate and legacy protocol checks, screenshots, 500 pages, depth 5, up to 30 browser pages, three browser rounds, and 5,000 scanner HTTP requests. It uses 1 request/second; large sites can take over an hour. Browser resource requests and TLS handshakes are separate. Deep overrides the smaller limits below.</p>
+      <label class="block">
         <span class="label">Target URL</span>
         <input class="input" name="target_url" required placeholder="https://example.com">
       </label>
@@ -53,6 +61,7 @@
         </select>
       </label>
       <div class="space-y-2">
+        <label class="check"><input type="checkbox" name="enable_cve_enrichment"> Known library advisories (sends library names and versions to OSV)</label>
         <label class="check"><input type="checkbox" name="enable_browser" checked> Browser/runtime analysis</label>
         <label class="check"><input type="checkbox" name="enable_active_checks"> Low-impact active checks</label>
         <label class="check"><input type="checkbox" name="capture_screenshots" checked> Capture screenshots</label>

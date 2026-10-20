@@ -62,6 +62,75 @@ platform/web/     Cloudflare Pages/Workers app backed exclusively by NeonDB
 
 ## Usage
 
+### Deep public assessment
+
+The local dashboard at `http://127.0.0.1:8000/` has a **Deep public assessment** profile.
+Start the installed local environment with `./run-local.ps1`; it also selects the project's
+Chromium cache when present.
+
+```powershell
+python .\website_auditor.py https://example.com --profile deep
+```
+
+Deep enables browser analysis, screenshots, low-impact active heuristics, depth 5,
+500 pages, 30 browser pages across up to three rounds, 200 JavaScript assets,
+source-map inspection, 150 discovered GET endpoints, and 250 inferred candidates
+with 100 probes. Nested sitemaps and robots-declared sitemaps are followed within
+scope. Dynamic imports resolve relative to the script that imports them.
+OpenAPI GET endpoints and verified inferred routes are analyzed, not just listed.
+
+The profile allows 5,000 scanner HTTP requests and 500 active requests per target.
+The default rate remains one request per second, so large scans can take over an hour.
+Use `--max-requests 1000` to impose a smaller total HTTP cap even with Deep.
+Browser subresource requests are separate from this HTTP cap; browser page count
+and navigation timeout bound browser work. HTTP redirects and browser navigations
+are checked against the configured host scope.
+
+Reports include coverage limits, disabled checks, and execution errors. Content checks
+look for credential patterns (values omitted from evidence), diagnostic errors,
+insecure resources, form weaknesses, and missing third-party script integrity.
+Sensitive-file findings require recognizable content rather than HTTP 200 alone.
+Guessed API paths require API content evidence, and inferred-route probes compare
+against a random missing page to reject identical SPA/login fallback responses.
+These are public, unauthenticated checks. Reflection, missing CSRF fields, and other
+heuristics require review; logged-in authorization testing, business-logic testing,
+and broad server/software CVE matching are not implemented.
+
+Optional `--cve-enrichment` (or the dashboard advisory checkbox) queries the
+[OSV API](https://google.github.io/osv.dev/post-v1-query/) for explicit banner
+versions of selected JavaScript libraries. It sends only npm package names and
+versions, with up to 30 separate requests per target, pagination, and a per-scan
+cache. Deep mode does not enable this option automatically. Only fetched, in-scope
+scripts are inspected; stripped banners and external CDN assets can leave gaps.
+Affected-version matches are medium-confidence review findings, not verified
+exploits. Provider severity is retained as metadata; these review findings use
+medium severity. Lookup errors mark coverage incomplete. Zero matches do not
+establish that dependencies are secure.
+
+TLS inspection validates the entry HTTPS origin's certificate using the scanner's
+trust store and checks expiry, validity dates, RSA/EC key strength, and weak signature
+hashes. Deep also attempts TLS 1.0 and 1.1 handshakes. A failed legacy handshake is
+reported as inconclusive because the client may disable that protocol; it is not
+proof that the server rejects it. Negotiated cipher details are recorded, but this
+is not an exhaustive cipher-suite or certificate-chain audit. TLS handshakes have
+individual timeouts and are separate from the HTTP request cap. Use
+`--skip-tls-checks` to disable inspection, or `--probe-legacy-tls` with Standard.
+
+Cookie attributes are parsed separately from values, with SameSite and cookie-prefix
+validation. CSP checks account for effective script directives, nonce/hash policies,
+and multiple enforced policies. The rendered browser DOM also receives content and
+form checks, and screenshots use unique names per page. Discovered pages recursively
+feed their links back into analysis within the discovery budget.
+
+Coverage is marked `completed` (configured checks only), `partial`, or `failed`.
+Request, page, depth, browser, and inspection limits, robots exclusions, and execution
+errors can make results partial. A failed assessment receives no posture grade.
+The CLI returns exit code 2 when it cannot assess any page for a target, exit code 1
+for blocking high/critical vulnerabilities, and otherwise exit code 0. Partial
+coverage remains visible in the report and should be reviewed before relying on
+the findings. TLS observations and coverage status are included in HTML, Markdown,
+and structured report payloads.
+
 ```powershell
 python .\website_auditor.py https://example.com
 ```
@@ -198,7 +267,7 @@ playwright install chromium
 
 The package includes stable seams for additional production phases:
 
-- CVE, CVSS, and EPSS enrichment workers in `scanner/core/enrichment.py`.
+- Broader software identification, CVSS scoring, and EPSS enrichment (not implemented).
 - Plugin package auto-discovery and richer lifecycle controls in `scanner/plugins`.
 - Dependency vulnerability mapping in `scanner/fingerprints`.
 - Larger integration fixtures and benchmark targets in `benchmarks/`.

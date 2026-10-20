@@ -14,11 +14,6 @@
     </form>
   </div>
 </div>
-<section
-  id="scan-status"
-  hx-get="/scan/{{ scan.id }}/status"
-  hx-trigger="load, every 2s [document.querySelector('#scan-status')?.dataset.done !== 'true']"
-  hx-swap="outerHTML">
-  {% include "partials/scan_status.html" %}
-</section>
+<p id="scan-refresh-message" role="status" class="mb-3 text-sm"></p>
+{% include "partials/scan_status.html" %}
 {% endblock %}

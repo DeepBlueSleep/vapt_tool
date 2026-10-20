@@ -7,6 +7,13 @@ from pydantic import BaseModel, Field, HttpUrl
 
 class ScanCreate(BaseModel):
     url: HttpUrl
+    profile: Literal["standard", "deep"] = "standard"
+    max_requests: int = Field(default=2000, ge=1, le=20000)
+    browser_page_budget: int = Field(default=10, ge=1, le=100)
+    browser_max_rounds: int = Field(default=1, ge=1, le=5)
+    enable_tls_checks: bool = True
+    probe_legacy_tls: bool = False
+    enable_cve_enrichment: bool = False
     max_depth: int = Field(default=1, ge=0, le=5)
     max_pages: int = Field(default=25, ge=1, le=500)
     enable_browser: bool = False

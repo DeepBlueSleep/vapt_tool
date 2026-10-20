@@ -48,8 +48,8 @@ async def analyze_reflections(client: HttpClient, page: Page, budget: int = 5) -
         if parameter.method != "GET":
             continue
         marker = make_marker()
-        test_url = _url_with_parameter(page.final_url, parameter.name, marker.value)
-        response = await client.get(test_url)
+        test_url = _url_with_parameter(parameter.form_action or parameter.source_url, parameter.name, marker.value)
+        response = await client.request("GET", test_url, active=True)
         snapshot = ResponseSnapshot(response.url, response.final_url, response.status, response.headers, response.body)
         diff = compare_responses(baseline, snapshot, (marker.value,))
         if not diff.reflected_markers:

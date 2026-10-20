@@ -10,10 +10,10 @@ from scanner.core.models import Classification, Confidence, Finding, FindingScop
 
 
 async def analyze_runtime_api(client: HttpClient, api: RuntimeApiRequest, request_budget: int = 10) -> list[Finding]:
-    if request_budget <= 0 or api.kind in {RuntimeApiKind.ANALYTICS, RuntimeApiKind.ASSET, RuntimeApiKind.WEBSOCKET}:
+    if request_budget <= 0 or api.method.upper() not in {"GET", "HEAD"} or api.kind in {RuntimeApiKind.ANALYTICS, RuntimeApiKind.ASSET, RuntimeApiKind.WEBSOCKET}:
         return []
     findings: list[Finding] = []
-    response = await client.get(api.url)
+    response = await client.request("GET", api.url, active=True)
     fields = json_fields(response.body)
     if fields and any(field.lower() in {"debug", "trace", "stack", "exception", "sql"} for field in fields):
         findings.append(
@@ -29,7 +29,8 @@ async def analyze_runtime_api(client: HttpClient, api: RuntimeApiRequest, reques
                 scope=FindingScope.ENDPOINT,
             )
         )
-    findings.extend(await _json_reflection(client, api, response))
+    if request_budget > 1:
+        findings.extend(await _json_reflection(client, api, response))
     if api.kind == RuntimeApiKind.GRAPHQL and response.status in {200, 400}:
         findings.append(
             make_finding(
@@ -55,7 +56,7 @@ async def _json_reflection(client: HttpClient, api: RuntimeApiRequest, baseline_
     query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
     query[api.request_fields[0]] = marker
     test_url = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
-    candidate = await client.get(test_url)
+    candidate = await client.request("GET", test_url, active=True)
     baseline = ResponseSnapshot(
         api.url,
         baseline_response.final_url,

@@ -5,7 +5,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from scanner.core.config import ScanConfig, ScopeConfig
+from scanner.core.config import ScanConfig, ScopeConfig, apply_scan_profile
 from scanner.core.models import TargetReport
 from scanner.core.orchestrator import Scanner
 from scanner.reporting.diff import compare_report_files, render_diff_markdown
@@ -16,6 +16,11 @@ from scanner.utils.logging import configure_logging
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a safe asynchronous website security assessment.")
     parser.add_argument("urls", nargs="+", help="Website URLs or hostnames to scan.")
+    parser.add_argument("--profile", choices=("standard", "deep"), default="standard",
+                        help="Deep enables browser and active checks, 500 pages and recursive discovery.")
+    parser.add_argument("--max-requests", type=int, default=2000, help="Total scanner HTTP request cap per target.")
+    parser.add_argument("--skip-tls-checks", action="store_true", help="Skip separate TLS certificate and transport inspection.")
+    parser.add_argument("--probe-legacy-tls", action="store_true", help="Attempt bounded TLS 1.0/1.1 handshakes; included in Deep.")
     parser.add_argument("--out-dir", default="audit-reports", help="Directory for generated reports.")
     parser.add_argument("--timeout", type=float, default=10.0, help="Network timeout in seconds.")
     parser.add_argument("--max-depth", type=int, default=1, help="Maximum crawl depth.")
@@ -40,7 +45,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--disable-api-expansion", action="store_true", help="Disable recursive API route inference.")
     parser.add_argument("--disable-runtime-expansion", action="store_true", help="Disable runtime-driven route/API inference.")
     parser.add_argument("--expansion-candidates", type=int, default=50, help="Maximum inferred attack-surface candidates per target.")
-    parser.add_argument("--expansion-probe-budget", type=int, default=25, help="Maximum low-impact HEAD probes for inferred candidates.")
+    parser.add_argument("--expansion-probe-budget", type=int, default=25, help="Maximum bounded GET probes, including fallback detection, for inferred candidates.")
     parser.add_argument("--expansion-min-confidence", type=float, default=0.35, help="Minimum confidence for inferred candidates.")
     parser.add_argument("--metrics", action="store_true", help="Include scan metrics in reports.")
     parser.add_argument("--trace-requests", action="store_true", help="Emit structured logs for each HTTP request.")
@@ -66,6 +71,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--database-url", default="sqlite+aiosqlite:///./platform.db", help="Assessment platform database URL.")
     parser.add_argument("--owner", help="Optional scan owner for platform persistence.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug structured logs.")
+    parser.add_argument("--cve-enrichment", action="store_true", help="Send detected library names/versions to OSV for advisory lookup.")
     return parser.parse_args(argv)
 
 
@@ -82,6 +88,10 @@ async def async_main(argv: list[str]) -> int:
         include_exposure_checks=not args.skip_exposure_checks,
         enable_active_checks=args.enable_active_checks,
         request_budget=max(args.request_budget, 1),
+        max_requests=max(args.max_requests, 1),
+        enable_tls_checks=not args.skip_tls_checks,
+        probe_legacy_tls=args.probe_legacy_tls,
+        enable_cve_enrichment=args.cve_enrichment,
         enable_browser_checks=args.browser,
         browser_timeout_ms=max(args.browser_timeout, 1000),
         browser_route_budget=max(args.browser_route_budget, 1),
@@ -108,6 +118,13 @@ async def async_main(argv: list[str]) -> int:
             respect_robots_txt=not args.ignore_robots,
         ),
     )
+    config = apply_scan_profile(config, args.profile)
+    if args.skip_tls_checks:
+        from dataclasses import replace
+        config = replace(config, enable_tls_checks=False)
+    if any(arg == "--max-requests" or arg.startswith("--max-requests=") for arg in argv):
+        from dataclasses import replace
+        config = replace(config, max_requests=max(args.max_requests, 1))
     reports = await Scanner(config).scan(args.urls)
     if args.persist:
         await _persist_reports(args.database_url, reports, args.owner, config)
@@ -134,6 +151,8 @@ async def async_main(argv: list[str]) -> int:
             for classification in ("vulnerability", "weakness", "recommendation")
         )
     )
+    if any(report.coverage_status == "failed" for report in reports):
+        return 2
     return 1 if has_blocking_vulnerability(reports) else 0
 
 

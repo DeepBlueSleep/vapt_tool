@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from scanner.core.scope import Scope
 
 from scanner.browser.dom_observer import DOM_COLLECTION_SCRIPT, DOM_OBSERVER_SCRIPT, DomMutationObservation, parse_dom_observations
 from scanner.browser.network_capture import NETWORK_INSTRUMENTATION, RuntimeApiRequest, api_request_from_capture, classify_runtime_api
@@ -23,6 +25,9 @@ class BrowserObservation:
     spa_routes: list[SpaRoute] = field(default_factory=list)
     runtime_apis: list[RuntimeApiRequest] = field(default_factory=list)
     dom_mutations: list[DomMutationObservation] = field(default_factory=list)
+    rendered_html: str = ""
+    final_url: str | None = None
+    dom_truncated: bool = False
 
 
 class PlaywrightAnalyzer:
@@ -38,10 +43,12 @@ class PlaywrightAnalyzer:
         timeout_ms: int = 15_000,
         screenshot_dir: Path | None = None,
         capture_screenshots: bool = False,
+        scope: Scope | None = None,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.screenshot_dir = screenshot_dir
         self.capture_screenshots = capture_screenshots
+        self.scope = scope
 
     async def analyze(self, url: str) -> BrowserObservation:
         try:
@@ -83,9 +90,25 @@ class PlaywrightAnalyzer:
                 )
 
                 page = await context.new_page()
+                if self.scope is not None:
+                    async def guard_navigation(route):
+                        request = route.request
+                        if request.is_navigation_request() and not self.scope.is_allowed(request.url):
+                            await route.abort()
+                        else:
+                            await route.continue_()
+                    await context.route("**/*", guard_navigation)
                 await page.add_init_script(ROUTE_INSTRUMENTATION)
                 await page.add_init_script(NETWORK_INSTRUMENTATION)
                 await page.add_init_script(DOM_OBSERVER_SCRIPT)
+                await page.add_init_script("""(() => {
+                    window.__scannerCspViolations = [];
+                    document.addEventListener('securitypolicyviolation', event => {
+                        if (window.__scannerCspViolations.length < 100) {
+                            window.__scannerCspViolations.push(event.effectiveDirective + ': ' + event.blockedURI.split('?')[0]);
+                        }
+                    });
+                })();""")
 
                 # Console monitoring
                 page.on(
@@ -173,6 +196,14 @@ class PlaywrightAnalyzer:
                     observation.console_errors.append(f"DOM observation extraction failed: {exc}")
 
                 # Screenshot capture
+                try:
+                    rendered = await page.content()
+                    observation.dom_truncated = len(rendered) > 512000
+                    observation.rendered_html = rendered[:512000]
+                    observation.final_url = page.url
+                    observation.csp_violations = await page.evaluate("() => window.__scannerCspViolations || []")
+                except Exception as exc:
+                    observation.console_errors.append(f"Rendered DOM extraction failed: {exc}")
                 if self.capture_screenshots and self.screenshot_dir:
                     try:
                         self.screenshot_dir.mkdir(
@@ -182,7 +213,7 @@ class PlaywrightAnalyzer:
 
                         screenshot_path = (
                             self.screenshot_dir
-                            / "browser-screenshot.png"
+                            / f"browser-{hashlib.sha256(url.encode()).hexdigest()[:20]}.png"
                         )
 
                         await page.screenshot(

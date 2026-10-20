@@ -9,6 +9,7 @@ __pycache__/
 htmlcov/
 
 .venv/
+.browser-cache/
 venv/
 
 audit-reports/

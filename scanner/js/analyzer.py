@@ -36,7 +36,7 @@ def analyze_javascript(source_url: str, content: str, base_url: str) -> JavaScri
         _collect_url(match.group("url"), base_url, endpoints, websockets)
     for match in IMPORT_RE.finditer(content):
         try:
-            imports.add(normalize_url(match.group("url"), base_url))
+            imports.add(normalize_url(match.group("url"), source_url))
         except ValueError:
             continue
     for match in ROUTE_RE.finditer(content):

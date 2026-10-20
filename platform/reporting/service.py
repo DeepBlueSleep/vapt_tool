@@ -53,6 +53,7 @@ def _target_from_scan(scan: Scan) -> TargetReport:
     metrics = {metric.name: metric.value for metric in getattr(scan, "metrics", [])}
     return TargetReport(
         input_url=scan.target_url,
+        coverage_status=(inventory.get("assessment_status") or ["not_recorded"])[0],
         final_url=scan.target_url,
         pages_crawled=scan.pages_crawled,
         findings=findings,

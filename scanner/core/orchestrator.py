@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import urllib.parse
+import re
+from collections import deque
 
 from scanner.active.runtime_api_analysis import analyze_runtime_api
 from scanner.auth.detection import detect_auth_signals
@@ -12,8 +14,11 @@ from scanner.browser.playwright_analyzer import BrowserObservation, PlaywrightAn
 from scanner.checks.active import SafeActiveCheck
 from scanner.checks.discovery import check_common_exposures, discover_api_surface
 from scanner.checks.fingerprints import TechnologyFingerprintCheck
-from scanner.checks.passive import CookieCheck, HeaderCheck, HtmlPassiveCheck
+from scanner.checks.passive import CookieCheck, HeaderCheck
+from scanner.checks.tls import inspect_tls
+from scanner.checks.content import ContentCheck
 from scanner.core.config import ScanConfig, ScopeConfig
+from scanner.core.enrichment import enrich_report, identify_libraries
 from scanner.core.http import HttpClient
 from scanner.core.models import Form, Page, TargetReport
 from scanner.core.scope import Scope
@@ -41,9 +46,12 @@ class Scanner:
         self.events = EventDispatcher()
         self.registry.register(HeaderCheck())
         self.registry.register(CookieCheck())
-        self.registry.register(HtmlPassiveCheck())
+        self.registry.register(ContentCheck())
         self.registry.register(TechnologyFingerprintCheck())
         self.feedback_state = BrowserFeedbackState()
+        self._processed_urls: set[str] = set()
+        self._analyzed_scripts: set[str] = set()
+        self._expanded_urls: list[str] = []
 
     async def scan(self, raw_urls: list[str]) -> list[TargetReport]:
         reports: list[TargetReport] = []
@@ -52,11 +60,18 @@ class Scanner:
         return reports
 
     async def scan_target(self, raw_url: str) -> TargetReport:
+        self._libraries: dict[tuple[str, str], set[str]] = {}
+        self.events.counts.clear()
+        self._expanded_urls = []
+        self.feedback_state = BrowserFeedbackState()
+        self._processed_urls: set[str] = set()
+        self._analyzed_scripts: set[str] = set()
         report = TargetReport(input_url=raw_url, scanned_at_utc=dt.datetime.now(dt.UTC).isoformat())
         try:
             start_url = normalize_url(raw_url)
         except ValueError as exc:
             report.errors.append(str(exc))
+            report.coverage_status = "failed"
             return report
 
         host = urllib.parse.urlparse(start_url).hostname or ""
@@ -74,6 +89,7 @@ class Scanner:
             config = self.config
 
         scope = Scope(config.scope)
+        self._scan_scope = scope
         async with HttpClient(config, scope) as client:
             if config.enable_active_checks:
                 self.registry.register(SafeActiveCheck(client, request_budget=config.request_budget))
@@ -86,6 +102,12 @@ class Scanner:
                 report.status_code = pages[0].status
             else:
                 report.final_url = start_url
+            if config.enable_tls_checks:
+                tls = await inspect_tls(report.final_url, scope, config.timeout_seconds, config.probe_legacy_tls)
+                report.findings.extend(tls.findings)
+                report.inventory["tls"] = tls.inventory
+                report.errors.extend(tls.errors)
+                report.metrics["tls_handshakes"] = tls.handshakes
             for page in pages:
                 await self._process_page(client, page, report, config, graph)
             if config.include_exposure_checks:
@@ -95,7 +117,64 @@ class Scanner:
             if config.enable_browser_checks:
                 await self._run_browser_feedback(client, scope, start_url, report, config, graph)
             await self._expand_attack_surface(client, start_url, report, config, graph)
+            await self._analyze_discovered_pages(client, report, config, graph)
             report.metrics["http_requests"] = client.request_count
+            report.metrics["request_limit"] = config.max_requests
+            report.metrics["request_budget_exhausted"] = int(client.budget_exhausted)
+            report.metrics["blocked_redirects"] = client.blocked_redirects
+            report.metrics["active_requests"] = config.request_budget - client._active_remaining
+            report.metrics["truncated_responses"] = client.truncated_responses
+            report.metrics["crawl_pending_urls"] = crawler.pending_urls
+            report.metrics["crawl_depth_limited_urls"] = len(crawler.depth_limited_urls - self._processed_urls)
+            report.metrics["robots_excluded_urls"] = crawler.robots_excluded
+            report.errors.extend(client.errors)
+            report.inventory["coverage"] = [
+                f"HTTP requests: {client.request_count}/{config.max_requests}",
+                f"Pages analyzed: {len(self._processed_urls)}/{config.max_pages}",
+                f"JavaScript assets analyzed: {len(self._analyzed_scripts)}",
+                f"Responses reaching the 512 KB inspection limit: {client.truncated_responses}",
+                f"Active heuristics: {'enabled' if config.enable_active_checks else 'disabled'}",
+                f"Browser analysis: {'enabled' if config.enable_browser_checks else 'disabled'}",
+                f"Browser pages attempted: {report.metrics.get('browser_pages_attempted', 0)}/{config.browser_page_budget}; browser subresources are outside the HTTP request cap.",
+                f"TLS inspection: {'enabled for the entry HTTPS origin' if config.enable_tls_checks else 'disabled'}; TLS handshakes are separate from the HTTP request cap.",
+                "Public unauthenticated assessment; authorization and business logic require manual review.",
+                f"OSV advisory lookup: {'enabled' if config.enable_cve_enrichment else 'disabled'}; no absence-of-vulnerabilities claim.",
+            ]
+            if config.enable_cve_enrichment:
+                await enrich_report(report, self._libraries)
+            if client.budget_exhausted:
+                report.errors.append("Total HTTP request limit reached; coverage is incomplete.")
+            if len(self._processed_urls) >= config.max_pages:
+                report.inventory["coverage"].append("Page limit reached; additional pages may remain untested.")
+            report.pages_crawled = len(self._processed_urls)
+            if not self._processed_urls:
+                report.errors.append("No pages were successfully analyzed; findings do not establish security posture.")
+            gaps = []
+            for condition, message in (
+                (report.errors, "One or more checks encountered execution errors; see scan errors."),
+                (client.budget_exhausted, "The total HTTP request limit was reached."),
+                (client.truncated_responses, "Some response bodies exceeded the inspection limit."),
+                (crawler.pending_urls, "The crawl ended with URLs still pending."),
+                (report.metrics["crawl_depth_limited_urls"], "The crawl depth limit excluded discovered URLs."),
+                (crawler.robots_excluded, "robots.txt excluded some discovered URLs."),
+                (report.metrics.get("discovery_pending_urls", 0), "Recursive discovery ended with URLs still pending."),
+                (len(self._analyzed_scripts) >= config.javascript_budget, "The JavaScript asset budget was reached."),
+                (config.enable_active_checks and client._active_remaining <= 0, "The active-check request budget was reached."),
+                (report.metrics.get("browser_pages_attempted", 0) >= config.browser_page_budget, "The browser page budget was reached."),
+                (report.metrics.get("restricted_pages", 0), "HTTP 401/403 responses restricted access to some pages."),
+                (report.metrics.get("server_error_pages", 0), "Rate limiting or server errors restricted some page checks."),
+                (report.status_code is not None and report.status_code >= 400, "The entry URL returned an HTTP error response."),
+            ):
+                if condition:
+                    gaps.append(message)
+            report.inventory["coverage_gaps"] = gaps
+            report.coverage_status = "failed" if not self._processed_urls else "partial" if gaps else "completed"
+            report.inventory["assessment_status"] = [report.coverage_status]
+            report.inventory["coverage"].insert(0, f"Assessment status: {report.coverage_status}; applies only to configured checks.")
+            report.inventory["coverage"].extend(gaps)
+            report.inventory["coverage"].append(
+                f"Unvisited crawl URLs: {crawler.pending_urls}; depth-limited URLs: {report.metrics['crawl_depth_limited_urls']}; robots exclusions: {crawler.robots_excluded}."
+            )
             report.metrics["http_request_time_ms"] = round(client.total_request_time_ms, 2)
             for key, value in graph.summary().items():
                 report.metrics[f"graph_{key}"] = value
@@ -112,6 +191,13 @@ class Scanner:
         config: ScanConfig,
         graph: AttackSurfaceGraph,
     ) -> None:
+        if page.status is None or page.final_url in self._processed_urls or len(self._processed_urls) >= config.max_pages:
+            return
+        self._processed_urls.add(page.final_url)
+        if page.status in {401, 403}:
+            report.metrics["restricted_pages"] = report.metrics.get("restricted_pages", 0) + 1
+        if page.status == 429 or page.status >= 500:
+            report.metrics["server_error_pages"] = report.metrics.get("server_error_pages", 0) + 1
         await self.events.publish(EventType.RESPONSE_RECEIVED, url=page.final_url, status=page.status)
         page_node = graph.add_node(NodeKind.PAGE, page.final_url)
         report.inventory.setdefault("pages", []).append(page.final_url)
@@ -165,13 +251,37 @@ class Scanner:
     ) -> None:
         report.inventory.setdefault("js_endpoints", [])
         report.inventory.setdefault("websockets", [])
-        for script in scripts[:20]:
+        pending_scripts = deque(scripts)
+        while pending_scripts and len(self._analyzed_scripts) < self.config.javascript_budget:
+            script = pending_scripts.popleft()
+            if script in self._analyzed_scripts:
+                continue
+            if not client.scope.is_allowed(script):
+                continue
+            self._analyzed_scripts.add(script)
             await self.events.publish(EventType.JS_DISCOVERED, url=script)
             response = await client.get(script)
             if response.status != 200 or not response.body:
                 continue
             content = response.body.decode("utf-8", "ignore")
+            script_page = Page(script, response.final_url, response.status, response.headers, response.body,
+                               content_type="application/javascript")
+            report.findings.extend(await ContentCheck().analyze(script_page, report))
+            for library in identify_libraries(content):
+                self._libraries.setdefault(library, set()).add(response.final_url)
             discovery = analyze_javascript(script, content, base_url)
+            pending_scripts.extend(discovery.dynamic_imports)
+            if self.config.analyze_source_maps:
+                match = re.search(r"[#@]\s*sourceMappingURL=([^\s*]+)", content)
+                if match and not match.group(1).startswith("data:"):
+                    map_url = urllib.parse.urljoin(script, match.group(1))
+                    if client.scope.is_allowed(map_url):
+                        mapped = await client.get(map_url)
+                        if mapped.status == 200:
+                            report.inventory.setdefault("source_maps", []).append(map_url)
+                            map_page = Page(map_url, mapped.final_url, mapped.status, mapped.headers, mapped.body,
+                                            content_type="application/json")
+                            report.findings.extend(await ContentCheck().analyze(map_page, report))
             for name, version in discovery.frameworks.items():
                 report.technologies.setdefault(f"js_framework:{name}", version)
             for insight in analyze_frameworks(script, content):
@@ -243,6 +353,8 @@ class Scanner:
         report.inventory.setdefault("predictable_locations", [])
         report.inventory.setdefault("verified_expanded_routes", [])
         for candidate in candidates:
+            if candidate.verified:
+                self._expanded_urls.append(candidate.url)
             line = candidate.inventory_line()
             if line not in report.inventory["expanded_attack_surface"]:
                 report.inventory["expanded_attack_surface"].append(line)
@@ -283,14 +395,17 @@ class Scanner:
         config: ScanConfig,
         graph: AttackSurfaceGraph,
     ) -> None:
-        urls_to_analyze = [start_url]
+        urls_to_analyze = list(dict.fromkeys([start_url, *report.inventory.get("pages", [])]))[:config.browser_page_budget]
         analyzed: set[str] = set()
         for round_index in range(max(1, config.browser_max_rounds)):
             next_urls: list[str] = []
             for browser_url in urls_to_analyze:
+                if len(analyzed) >= config.browser_page_budget or client.budget_exhausted:
+                    break
                 if browser_url in analyzed:
                     continue
                 analyzed.add(browser_url)
+                report.metrics["browser_pages_attempted"] = len(analyzed)
                 observation = await self._run_browser(browser_url, report, config)
                 if observation is None:
                     continue
@@ -307,6 +422,12 @@ class Scanner:
                 )
                 report.metrics["browser_feedback_candidates"] = report.metrics.get("browser_feedback_candidates", 0) + len(candidates)
                 for candidate in candidates:
+                    if len(self._processed_urls) >= config.max_pages or client.budget_exhausted:
+                        break
+                    if candidate.url in self._processed_urls:
+                        continue
+                    if config.scope.respect_robots_txt and not await AsyncCrawler(config, client, scope).robots.allowed(client, candidate.url, config.user_agent):
+                        continue
                     if config.trace_feedback_loop:
                         LOGGER.info(
                             "browser_feedback_candidate",
@@ -326,12 +447,79 @@ class Scanner:
                 timeout_ms=config.browser_timeout_ms,
                 screenshot_dir=config.out_dir / "screenshots",
                 capture_screenshots=config.capture_screenshots,
+                scope=getattr(self, "_scan_scope", None),
             )
             observation = await analyzer.analyze(start_url)
+            failures = [error for error in observation.console_errors if error.startswith((
+                "Browser analysis failed:", "Navigation timeout", "Rendered DOM extraction failed:",
+                "Runtime API extraction failed:", "DOM observation extraction failed:", "Route extraction failed:", "Screenshot failed:",
+            ))]
+            report.errors.extend(failures)
+            if observation.dom_truncated:
+                report.errors.append(f"Rendered DOM inspection was truncated at 512,000 characters: {start_url}")
+            rendered_url = observation.final_url or start_url
+            if observation.rendered_html and (not getattr(self, "_scan_scope", None) or self._scan_scope.is_allowed(rendered_url)):
+                body = observation.rendered_html.encode("utf-8")
+                links, assets, scripts, forms = parse_html(body, rendered_url)
+                rendered_page = Page(start_url, rendered_url, 200, {}, body, content_type="text/html",
+                                     links=links, assets=assets, scripts=scripts, forms=forms)
+                existing = {finding.normalized_key() for finding in report.findings}
+                for finding in await ContentCheck().analyze(rendered_page, report):
+                    if finding.normalized_key() not in existing:
+                        report.findings.append(finding)
+                        existing.add(finding.normalized_key())
+                report.inventory.setdefault("browser_rendered_pages", []).append(rendered_url)
+                for parameter in harvest_page_parameters(rendered_page):
+                    report.inventory.setdefault("rendered_parameters", []).append(
+                        f"{parameter.method} {parameter.name} from {rendered_url}"
+                    )
+                for form in forms:
+                    item = f"{form.method.upper()} {form.action} ({','.join(form.inputs)})"
+                    if item not in report.inventory.setdefault("dynamic_forms", []):
+                        report.inventory["dynamic_forms"].append(item)
+            report.inventory.setdefault("browser_csp_violations", []).extend(observation.csp_violations)
         except RuntimeError as exc:
             report.errors.append(str(exc))
             return None
         return observation
+
+    async def _analyze_discovered_pages(
+        self, client: HttpClient, report: TargetReport, config: ScanConfig, graph: AttackSurfaceGraph,
+    ) -> None:
+        """Analyze concrete GET endpoints rather than only listing inferred inventory."""
+        from scanner.crawlers.robots import RobotsCache
+
+        robots = RobotsCache()
+        pending = list(report.inventory.get("js_endpoints", []))
+        for item in report.inventory.get("endpoints", []):
+            if item.startswith("GET "):
+                pending.append(item[4:])
+        pending.extend(getattr(self, "_expanded_urls", []))
+        seen: set[str] = set()
+        pending_queue = deque(pending)
+        queued = set(pending)
+        while pending_queue:
+            if len(seen) >= config.discovery_page_budget or len(self._processed_urls) >= config.max_pages or client.budget_exhausted:
+                break
+            raw_url = pending_queue.popleft()
+            url = urllib.parse.urljoin(report.final_url or report.input_url, raw_url)
+            if url in seen or url in self._processed_urls or "{" in url or not client.scope.is_allowed(url):
+                continue
+            seen.add(url)
+            if config.scope.respect_robots_txt and not await robots.allowed(client, url, config.user_agent):
+                continue
+            page = await self._fetch_feedback_page(client, url)
+            if page is not None:
+                report.pages_crawled += 1
+                await self._process_page(client, page, report, config, graph)
+                for discovered in (*page.links, *report.inventory.get("js_endpoints", [])):
+                    resolved = urllib.parse.urljoin(page.final_url, discovered)
+                    if resolved not in queued and resolved not in seen and client.scope.is_allowed(resolved):
+                        if len(queued) < config.discovery_page_budget * 10:
+                            queued.add(resolved)
+                            pending_queue.append(resolved)
+        report.metrics["discovery_pages_attempted"] = len(seen)
+        report.metrics["discovery_pending_urls"] = len(set(pending_queue) - self._processed_urls - seen)
 
     def _record_browser_observation(
         self,

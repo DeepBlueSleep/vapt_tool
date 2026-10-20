@@ -142,6 +142,9 @@ def render_markdown(result: ScanResult) -> str:
             lines.append(f"- Dynamic forms discovered: {len(target.inventory['dynamic_forms'])}")
         if target.errors:
             lines.append(f"- Errors: {'; '.join(target.errors)}")
+        if target.inventory.get("coverage"):
+            lines.extend(["", "### Coverage and limitations", ""])
+            lines.extend(f"- {item}" for item in target.inventory["coverage"])
         if not target.findings:
             lines.extend(["", "No findings detected by the configured checks."])
             continue

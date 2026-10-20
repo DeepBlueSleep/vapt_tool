@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import urllib.parse
+import secrets
 from dataclasses import dataclass, field
 
 from scanner.browser.network_capture import RuntimeApiRequest
@@ -126,14 +127,19 @@ async def expand_attack_surface(
 
 async def _probe_candidates(client: HttpClient, candidates: list[ExpansionCandidate], budget: int) -> tuple[ExpansionCandidate, ...]:
     verified: list[ExpansionCandidate] = []
+    baseline = None
+    if candidates and budget > 0:
+        baseline = await client.get(origin_for(candidates[0].url) + "/scanner-missing-" + secrets.token_hex(8))
+        budget -= 1
     for candidate in candidates:
         if budget <= 0:
             verified.append(candidate)
             continue
-        response = await client.head(candidate.url)
+        response = await client.get(candidate.url)
         budget -= 1
         status = response.status
-        is_verified = bool(status and status < 500 and status not in {404, 410})
+        matches_fallback = bool(baseline and baseline.status == 200 and response.body == baseline.body)
+        is_verified = bool(status and status in {200, 201, 204, 401, 403} and not response.error and not matches_fallback)
         verified.append(
             ExpansionCandidate(
                 url=response.final_url if is_verified else candidate.url,

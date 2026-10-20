@@ -141,6 +141,7 @@ class TargetReport:
     inventory: dict[str, list[str]] = field(default_factory=dict)
     metrics: dict[str, int | float] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    coverage_status: str = "not_recorded"
 
 
 @dataclass(frozen=True)

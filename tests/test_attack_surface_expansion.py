@@ -57,12 +57,12 @@ async def test_attack_surface_expansion_prioritizes_and_probes() -> None:
         "https://example.com/",
         technologies={"js_framework:react": "detected"},
         inventory={"runtime_apis": ["GET rest https://example.com/api/v1/users"], "pages": ["https://example.com/"]},
-        settings=ExpansionSettings(max_candidates=30, max_probe_requests=8),
+        settings=ExpansionSettings(max_candidates=30, max_probe_requests=9),
     )
     lines = [candidate.inventory_line() for candidate in candidates]
     assert any("graphql" in line for line in lines)
     assert any(candidate.verified for candidate in candidates)
-    assert client.requests <= 8
+    assert client.requests <= 9  # Eight candidate probes plus the missing-page baseline.
 
 
 def test_prioritization_prefers_high_value_routes() -> None:
@@ -96,3 +96,6 @@ class FakeClient:
         self.requests += 1
         status = self.statuses.get(url, 404)
         return HttpResponse(url=url, final_url=url, status=status, headers={}, body=b"")
+
+    async def get(self, url: str) -> HttpResponse:
+        return await self.head(url)

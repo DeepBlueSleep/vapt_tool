@@ -17,7 +17,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from scanner.core.config import ScanConfig
 from scanner.utils.url import normalize_url
 
 WEBUI_DIR = Path(__file__).parent
@@ -57,6 +56,8 @@ async def dashboard(request: Request) -> Response:
 async def start_scan(
     request: Request,
     target_url: str = Form(...),
+    profile: str = Form(default="standard"),
+    enable_cve_enrichment: str | None = Form(default=None),
     enable_browser: str | None = Form(default=None),
     enable_active_checks: str | None = Form(default=None),
     capture_screenshots: str | None = Form(default=None),
@@ -73,6 +74,9 @@ async def start_scan(
     expansion_probe_budget: int = Form(default=25),
     expansion_min_confidence: float = Form(default=0.35),
 ) -> RedirectResponse:
+    from platform.api.schemas import ScanCreate
+    from platform.api.queue import scan_config_from_payload
+
     try:
         normalized_target = normalize_url(target_url)
     except ValueError as exc:
@@ -86,6 +90,8 @@ async def start_scan(
     api_expansion_enabled = enable_api_expansion == "on"
     runtime_expansion_enabled = enable_runtime_expansion == "on"
     config_payload = {
+        "profile": profile,
+        "enable_cve_enrichment": enable_cve_enrichment == "on",
         "url": normalized_target,
         "max_depth": max_depth,
         "max_pages": max_pages,
@@ -103,27 +109,15 @@ async def start_scan(
     }
     config_payload["request_budget"] = max(request_budget, 1)
     config_payload["report_mode"] = report_mode
+    try:
+        validated_payload = ScanCreate.model_validate(config_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     async with request.app.state.session_factory() as session:
         repo = AssessmentRepository(session)
         scan = await repo.create_scan(normalized_target, config=config_payload)
         await session.commit()
-    config = ScanConfig(
-        out_dir=request.app.state.output_dir / f"scan-{scan.id}",
-        max_depth=max_depth,
-        max_pages=max_pages,
-        request_budget=max(request_budget, 1),
-        enable_browser_checks=browser_enabled,
-        enable_active_checks=active_enabled,
-        capture_screenshots=screenshots_enabled,
-        enable_attack_surface_expansion=expansion_enabled,
-        enable_framework_expansion=framework_enabled,
-        enable_predictable_locations=predictable_enabled,
-        enable_api_expansion=api_expansion_enabled,
-        enable_runtime_expansion=runtime_expansion_enabled,
-        expansion_max_candidates=max(expansion_max_candidates, 1),
-        expansion_probe_budget=max(expansion_probe_budget, 0),
-        expansion_min_confidence=max(0.0, min(expansion_min_confidence, 1.0)),
-    )
+    config = scan_config_from_payload(validated_payload, request.app.state.output_dir / f"scan-{scan.id}")
     request.app.state.scan_queue.enqueue(scan.id, scan.target_url, config)
     return RedirectResponse(url=f"/scan/{scan.id}", status_code=303)
 

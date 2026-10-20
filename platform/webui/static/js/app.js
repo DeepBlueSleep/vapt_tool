@@ -41,7 +41,6 @@ document.body.addEventListener("htmx:afterRequest", (event) => {
 });
 
 window.addEventListener("DOMContentLoaded", () => {
-  if (window.htmx) return;
   const status = document.getElementById("scan-status");
   if (!status) return;
   const match = window.location.pathname.match(/\/scan\/(\d+)/);
@@ -49,10 +48,27 @@ window.addEventListener("DOMContentLoaded", () => {
   const refresh = async () => {
     const current = document.getElementById("scan-status");
     if (!current || current.dataset.done === "true") return;
-    const response = await fetch(`/scan/${match[1]}/status`, { headers: { "x-requested-with": "fetch" } });
-    if (!response.ok) return;
-    current.outerHTML = await response.text();
+    const message = document.getElementById("scan-refresh-message");
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(`/scan/${match[1]}/status`, {
+        headers: { "x-requested-with": "fetch" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const fragment = new DOMParser().parseFromString(await response.text(), "text/html");
+      const next = fragment.getElementById("scan-status");
+      if (!next) throw new Error("Missing scan status");
+      current.replaceWith(next);
+      if (message) message.textContent = "";
+    } catch (error) {
+      if (message) message.textContent = "Progress connection interrupted. Retrying automatically…";
+    } finally {
+      window.clearTimeout(timeout);
+      window.setTimeout(refresh, 2000);
+    }
   };
   refresh();
-  window.setInterval(refresh, 2000);
 });

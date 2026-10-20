@@ -28,6 +28,14 @@ class ScanConfig:
     browser_timeout_ms: int = 15_000
     capture_screenshots: bool = False
     request_budget: int = 40
+    max_requests: int = 2000
+    browser_page_budget: int = 10
+    sitemap_budget: int = 10
+    discovery_page_budget: int = 25
+    javascript_budget: int = 50
+    analyze_source_maps: bool = False
+    enable_tls_checks: bool = True
+    probe_legacy_tls: bool = False
     browser_route_budget: int = 20
     browser_api_budget: int = 20
     browser_max_rounds: int = 1
@@ -50,3 +58,26 @@ class ScanConfig:
     expansion_min_confidence: float = 0.35
     cache_dir: Path = Path(".scanner-cache")
     scope: ScopeConfig = field(default_factory=ScopeConfig)
+
+
+def apply_scan_profile(config: ScanConfig, profile: str = "standard") -> ScanConfig:
+    """Deep public-page assessment; scope and request rate remain explicit."""
+    from dataclasses import replace
+
+    if profile == "standard":
+        return config
+    if profile != "deep":
+        raise ValueError(f"Unknown scan profile: {profile}")
+    return replace(
+        config, max_depth=max(config.max_depth, 5), max_pages=max(config.max_pages, 500),
+        enable_browser_checks=True, enable_active_checks=True, capture_screenshots=True,
+        request_budget=max(config.request_budget, 500), max_requests=max(config.max_requests, 5000),
+        browser_page_budget=max(config.browser_page_budget, 30), browser_route_budget=50,
+        browser_api_budget=100, browser_max_rounds=3, browser_timeout_ms=30000,
+        sitemap_budget=25, discovery_page_budget=150, enable_attack_surface_expansion=True,
+        enable_framework_expansion=True, enable_predictable_locations=True,
+        enable_api_expansion=True, enable_runtime_expansion=True,
+        expansion_max_candidates=250, expansion_probe_budget=100, emit_metrics=True,
+        javascript_budget=200, analyze_source_maps=True,
+        enable_tls_checks=True, probe_legacy_tls=True,
+    )

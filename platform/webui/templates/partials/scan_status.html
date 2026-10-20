@@ -5,7 +5,7 @@
         <span class="status status-{{ scan.status }}">{{ scan.status }}</span>
         <h2 class="mt-2 text-lg font-semibold">{{ progress.stage }}</h2>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {{ progress.percent }}% complete{% if progress.updated_at %} / updated {{ progress.updated_at }}{% endif %}
+          {% if scan.status in ['queued', 'running'] %}Estimated progress: {{ progress.percent }}%{% else %}{{ scan.status | title }}{% endif %}{% if progress.updated_at %} / last activity {{ progress.updated_at }}{% endif %}
         </p>
         {% if scan.error %}<p class="mt-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-100">{{ scan.error }}</p>{% endif %}
       </div>
